@@ -9,6 +9,7 @@ interface HeaderProps {
   onOpenEditProfile?: () => void;
   onOpenSync: () => void;
   onLogout: () => void;
+  cloudSyncStatus?: 'synced' | 'syncing' | 'offline';
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -17,6 +18,7 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenEditProfile,
   onOpenSync,
   onLogout,
+  cloudSyncStatus = 'synced',
 }) => {
   const givenName = getGivenName(caseProfile.name);
   const accurateAge = calculateAge(caseProfile.birthday, caseProfile.age);
@@ -66,13 +68,24 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
 
         <div className="flex items-center space-x-1.5">
-          {/* Sync / Data modal */}
+          {/* Sync / Data modal with Firebase status badge */}
           <button
             onClick={onOpenSync}
-            className="p-1.5 rounded-lg bg-emerald-800/70 hover:bg-emerald-800 text-emerald-100 hover:text-white transition text-xs cursor-pointer"
-            title="月度折線圖報表匯出與資料管理"
+            className="relative p-1.5 rounded-lg bg-emerald-800/70 hover:bg-emerald-800 text-emerald-100 hover:text-white transition text-xs cursor-pointer flex items-center justify-center"
+            title={
+              cloudSyncStatus === 'syncing'
+                ? 'Firebase 雲端同步更新中...'
+                : 'Firebase 雲端已連線同步（點擊匯出月度圖表/備份）'
+            }
           >
             <Cloud className="w-3.5 h-3.5" />
+            <span
+              className={`absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full border border-emerald-700 ${
+                cloudSyncStatus === 'syncing'
+                  ? 'bg-amber-400 animate-ping'
+                  : 'bg-emerald-300'
+              }`}
+            />
           </button>
 
           {/* Emergency Call Quick Contact */}

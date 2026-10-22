@@ -9,11 +9,11 @@ import {
   getDocs,
   Unsubscribe 
 } from 'firebase/firestore';
-import { CaseProfile } from '../types/health';
-import { CaseFullData } from '../data/mockData';
+import { CaseProfile, VitalSignRecord, AppointmentRecord, MedicationItem, MedicationLog, RehabPlanItem } from '../types/health';
+import { CaseFullData, caseWangDaMing, caseChenDeRong, caseLiShuFen } from '../data/mockData';
 import { normalizeBirthday } from '../utils/nameHelper';
 
-// 您的 Firebase 設定金鑰
+// Firebase configuration from user's Firebase console
 export const firebaseConfig = {
   apiKey: "AIzaSyDMdEvcx54uVS7wd_cyBfb2HcKd50a3-fY",
   authDomain: "health-diary-d518c.firebaseapp.com",
@@ -24,12 +24,16 @@ export const firebaseConfig = {
   measurementId: "G-MLH66HCPK2"
 };
 
+// Initialize Firebase App
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
 export const db = getFirestore(app);
 
 const COLLECTION_NAME = 'health_cases';
 const REGISTRY_DOC_ID = '__case_registry__';
 
+/**
+ * Sync Case registry list to Firebase
+ */
 export async function syncProfilesToFirebase(profiles: CaseProfile[]): Promise<void> {
   try {
     const regRef = doc(db, COLLECTION_NAME, REGISTRY_DOC_ID);
@@ -42,6 +46,9 @@ export async function syncProfilesToFirebase(profiles: CaseProfile[]): Promise<v
   }
 }
 
+/**
+ * Fetch Case registry list from Firebase
+ */
 export async function fetchProfilesFromFirebase(): Promise<CaseProfile[] | null> {
   try {
     const regRef = doc(db, COLLECTION_NAME, REGISTRY_DOC_ID);
@@ -58,43 +65,85 @@ export async function fetchProfilesFromFirebase(): Promise<CaseProfile[] | null>
   return null;
 }
 
-export function subscribeToProfiles(callback: (profiles: CaseProfile[]) => void): Unsubscribe {
+/**
+ * Subscribe to realtime Case registry updates
+ */
+export function subscribeToProfiles(
+  callback: (profiles: CaseProfile[]) => void
+): Unsubscribe {
   const regRef = doc(db, COLLECTION_NAME, REGISTRY_DOC_ID);
-  return onSnapshot(regRef, (snap) => {
-    if (snap.exists()) {
-      const data = snap.data();
-      if (Array.isArray(data.profiles)) callback(data.profiles);
+  return onSnapshot(
+    regRef,
+    (snap) => {
+      if (snap.exists()) {
+        const data = snap.data();
+        if (Array.isArray(data.profiles)) {
+          callback(data.profiles);
+        }
+      }
+    },
+    (error) => {
+      console.warn('Firebase subscribeToProfiles warning:', error);
     }
-  }, (err) => console.warn(err));
+  );
 }
 
+/**
+ * Save full case diary data to Cloud Firestore
+ */
 export async function saveCaseToFirebase(caseId: string, fullData: CaseFullData): Promise<void> {
   try {
     const caseRef = doc(db, COLLECTION_NAME, caseId);
-    await setDoc(caseRef, { ...fullData, lastSyncedAt: new Date().toISOString() }, { merge: true });
+    await setDoc(caseRef, {
+      ...fullData,
+      lastSyncedAt: new Date().toISOString()
+    }, { merge: true });
   } catch (err) {
-    console.warn(err);
+    console.warn(`Firebase saveCaseToFirebase warning for ${caseId}:`, err);
   }
 }
 
+/**
+ * Load full case diary data from Cloud Firestore
+ */
 export async function loadCaseFromFirebase(caseId: string): Promise<CaseFullData | null> {
   try {
     const caseRef = doc(db, COLLECTION_NAME, caseId);
     const snap = await getDoc(caseRef);
-    if (snap.exists()) return snap.data() as CaseFullData;
+    if (snap.exists()) {
+      return snap.data() as CaseFullData;
+    }
   } catch (err) {
-    console.warn(err);
+    console.warn(`Firebase loadCaseFromFirebase warning for ${caseId}:`, err);
   }
   return null;
 }
 
-export function subscribeToCaseData(caseId: string, onUpdate: (data: CaseFullData) => void): Unsubscribe {
+/**
+ * Realtime listener for active case diary data
+ */
+export function subscribeToCaseData(
+  caseId: string,
+  onUpdate: (data: CaseFullData) => void
+): Unsubscribe {
   const caseRef = doc(db, COLLECTION_NAME, caseId);
-  return onSnapshot(caseRef, (snap) => {
-    if (snap.exists()) onUpdate(snap.data() as CaseFullData);
-  }, (err) => console.warn(err));
+  return onSnapshot(
+    caseRef,
+    (snap) => {
+      if (snap.exists()) {
+        const remoteData = snap.data() as CaseFullData;
+        onUpdate(remoteData);
+      }
+    },
+    (err) => {
+      console.warn(`Firebase subscribeToCaseData warning for ${caseId}:`, err);
+    }
+  );
 }
 
+/**
+ * Find a case from Cloud Firestore across all devices by name and birthday
+ */
 export async function findCaseInCloudByCredentials(
   name: string,
   birthday: string
@@ -103,6 +152,7 @@ export async function findCaseInCloudByCredentials(
   const normBday = normalizeBirthday(birthday);
 
   try {
+    // 1. Try registry list first
     const remoteProfiles = await fetchProfilesFromFirebase();
     if (remoteProfiles) {
       const match = remoteProfiles.find(
@@ -110,10 +160,13 @@ export async function findCaseInCloudByCredentials(
       );
       if (match) {
         const fullData = await loadCaseFromFirebase(match.id);
-        if (fullData) return { profile: match, caseData: fullData };
+        if (fullData) {
+          return { profile: match, caseData: fullData };
+        }
       }
     }
 
+    // 2. Try query all documents in COLLECTION_NAME
     const colRef = collection(db, COLLECTION_NAME);
     const snap = await getDocs(colRef);
     for (const docSnap of snap.docs) {
@@ -129,7 +182,8 @@ export async function findCaseInCloudByCredentials(
       }
     }
   } catch (err) {
-    console.warn(err);
+    console.warn('Firebase findCaseInCloudByCredentials warning:', err);
   }
+
   return null;
 }

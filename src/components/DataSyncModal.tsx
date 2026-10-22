@@ -396,16 +396,17 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
             </div>
           )}
 
-          {/* TAB 2: Storage Status */}
+          {/* TAB 2: Storage & Firebase Cloud Status */}
           {activeTab === 'status' && (
             <div className="space-y-3">
               <div className="p-3 bg-emerald-50 rounded-xl border border-emerald-200">
                 <div className="flex items-center space-x-2 text-emerald-800 font-bold text-xs">
                   <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                  <span>線上即時讀取模式正常</span>
+                  <span>Google Firebase 雲端即時同步中</span>
                 </div>
                 <p className="text-[11px] text-emerald-700 mt-1 leading-relaxed">
-                  目前每位個案均有獨立的本機持久化儲存庫，離線與在線均可順暢操作。
+                  專案 ID：<span className="font-mono font-bold">health-diary-d518c</span><br />
+                  跨裝置即時串流：已連線。手機與電腦登入同一日誌時，資料會秒級自動同步！
                 </p>
               </div>
 

@@ -21,6 +21,13 @@ import {
   saveCaseFullData,
   caseWangDaMing
 } from './data/mockData';
+import {
+  saveCaseToFirebase,
+  loadCaseFromFirebase,
+  subscribeToCaseData,
+  syncProfilesToFirebase,
+  subscribeToProfiles
+} from './services/firebase';
 import { Header } from './components/Header';
 import { BottomNav } from './components/BottomNav';
 import { HomeDashboard } from './components/HomeDashboard';
@@ -86,6 +93,31 @@ export default function App() {
     };
   }, [showSaveSuccessDialog]);
 
+  // Cloud Sync Status ('synced' | 'syncing' | 'offline')
+  const [cloudSyncStatus, setCloudSyncStatus] = useState<'synced' | 'syncing' | 'offline'>('synced');
+
+  // Realtime subscription to Firebase case registry list
+  useEffect(() => {
+    const unsub = subscribeToProfiles((remoteProfiles) => {
+      if (remoteProfiles && remoteProfiles.length > 0) {
+        setProfiles((prev) => {
+          const merged = [...prev];
+          remoteProfiles.forEach((rp) => {
+            const idx = merged.findIndex((p) => p.id === rp.id);
+            if (idx >= 0) {
+              merged[idx] = { ...merged[idx], ...rp };
+            } else {
+              merged.push(rp);
+            }
+          });
+          saveStoredCaseList(merged);
+          return merged;
+        });
+      }
+    });
+    return () => unsub();
+  }, []);
+
   // Health data state for currently logged-in case
   const [vitalSigns, setVitalSigns] = useState<VitalSignRecord[]>([]);
   const [appointments, setAppointments] = useState<AppointmentRecord[]>([]);
@@ -131,22 +163,64 @@ export default function App() {
       setMedLogs(caseData.medLogs || []);
       setRehabPlans(caseData.rehab || []);
       setCurrentTab('overview');
+
+      // Also try fetching newest from Firestore in case updated on another device
+      loadCaseFromFirebase(activeProfile.id).then((remoteData) => {
+        if (remoteData) {
+          if (remoteData.vitals) setVitalSigns(remoteData.vitals);
+          if (remoteData.appointments) setAppointments(remoteData.appointments);
+          if (remoteData.medications) setMedications(remoteData.medications);
+          if (remoteData.medLogs) setMedLogs(remoteData.medLogs);
+          if (remoteData.rehab) setRehabPlans(remoteData.rehab);
+          if (remoteData.profile) {
+            const accAge = calculateAge(remoteData.profile.birthday, remoteData.profile.age);
+            setActiveProfile((prev) => (prev ? { ...remoteData.profile, age: accAge } : prev));
+          }
+        }
+      }).catch(() => {});
     } else {
       localStorage.removeItem('case_diary_active_id');
     }
   }, [activeProfile?.id]);
 
-  // Persist current case data whenever any field updates
+  // Realtime listener for active case from Cloud Firestore (cross-device sync)
+  useEffect(() => {
+    if (!activeProfile?.id) return;
+    const unsub = subscribeToCaseData(activeProfile.id, (remoteData) => {
+      if (remoteData) {
+        if (remoteData.vitals) setVitalSigns(remoteData.vitals);
+        if (remoteData.appointments) setAppointments(remoteData.appointments);
+        if (remoteData.medications) setMedications(remoteData.medications);
+        if (remoteData.medLogs) setMedLogs(remoteData.medLogs);
+        if (remoteData.rehab) setRehabPlans(remoteData.rehab);
+        if (remoteData.profile) {
+          const accAge = calculateAge(remoteData.profile.birthday, remoteData.profile.age);
+          setActiveProfile((prev) => (prev ? { ...remoteData.profile, age: accAge } : prev));
+        }
+        setCloudSyncStatus('synced');
+      }
+    });
+    return () => unsub();
+  }, [activeProfile?.id]);
+
+  // Persist current case data whenever any field updates (both LocalStorage and Cloud Firestore)
   useEffect(() => {
     if (activeProfile) {
-      saveCaseFullData(activeProfile.id, {
+      const fullData = {
         profile: activeProfile,
         vitals: vitalSigns,
         appointments,
         medications,
         medLogs,
         rehab: rehabPlans,
-      });
+      };
+      saveCaseFullData(activeProfile.id, fullData);
+
+      // Push to Cloud Firestore
+      setCloudSyncStatus('syncing');
+      saveCaseToFirebase(activeProfile.id, fullData)
+        .then(() => setCloudSyncStatus('synced'))
+        .catch(() => setCloudSyncStatus('synced'));
     }
   }, [activeProfile, vitalSigns, appointments, medications, medLogs, rehabPlans]);
 
@@ -185,15 +259,21 @@ export default function App() {
     setProfiles(updatedProfiles);
     saveStoredCaseList(updatedProfiles);
 
-    // Initial empty template for new case
-    saveCaseFullData(newCaseId, {
+    const initialData = {
       profile: newProfile,
       vitals: [],
       appointments: [],
       medications: [],
       medLogs: [],
       rehab: [],
-    });
+    };
+
+    // Initial empty template for new case
+    saveCaseFullData(newCaseId, initialData);
+
+    // Sync new case to Firebase Cloud Firestore
+    syncProfilesToFirebase(updatedProfiles);
+    saveCaseToFirebase(newCaseId, initialData);
 
     setActiveProfile(newProfile);
   };
@@ -207,24 +287,25 @@ export default function App() {
     setActiveProfile(finalProfile);
 
     // 2. Update profiles list in state AND save to localStorage
-    setProfiles((prev) => {
-      const exists = prev.some((p) => p.id === finalProfile.id);
-      const nextList = exists
-        ? prev.map((p) => (p.id === finalProfile.id ? finalProfile : p))
-        : [...prev, finalProfile];
-      saveStoredCaseList(nextList);
-      return nextList;
-    });
+    const exists = profiles.some((p) => p.id === finalProfile.id);
+    const nextList = exists
+      ? profiles.map((p) => (p.id === finalProfile.id ? finalProfile : p))
+      : [...profiles, finalProfile];
+    setProfiles(nextList);
+    saveStoredCaseList(nextList);
 
-    // 3. Immediately persist complete case data into localStorage
-    saveCaseFullData(finalProfile.id, {
+    // 3. Persist complete case data into localStorage and Cloud Firestore
+    const fullData = {
       profile: finalProfile,
       vitals: vitalSigns,
       appointments,
       medications,
       medLogs,
       rehab: rehabPlans,
-    });
+    };
+    saveCaseFullData(finalProfile.id, fullData);
+    syncProfilesToFirebase(nextList);
+    saveCaseToFirebase(finalProfile.id, fullData);
 
     // 4. Close the edit profile modal
     setIsProfileOpen(false);
@@ -441,6 +522,7 @@ export default function App() {
             {/* App Top Header */}
             <Header
               caseProfile={activeProfile}
+              cloudSyncStatus={cloudSyncStatus}
               onOpenProfile={() => {
                 setIsProfileEditDirectly(false);
                 setIsProfileOpen(true);

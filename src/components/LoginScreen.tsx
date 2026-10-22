@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { HeartPulse, User, Calendar, ShieldCheck, UserPlus, Info } from 'lucide-react';
+import { HeartPulse, User, Calendar, ShieldCheck, UserPlus, Info, CloudCheck, Loader2 } from 'lucide-react';
 import { CaseProfile } from '../types/health';
 import { normalizeBirthday } from '../utils/nameHelper';
+import { findCaseInCloudByCredentials } from '../services/firebase';
+import { CaseFullData, saveCaseFullData, saveStoredCaseList } from '../data/mockData';
 
 interface LoginScreenProps {
   onLoginSuccess: (caseProfile: CaseProfile) => void;
@@ -18,8 +20,9 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
   const [birthday, setBirthday] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
   const [showNewCasePrompt, setShowNewCasePrompt] = useState(false);
+  const [isSearchingCloud, setIsSearchingCloud] = useState(false);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage('');
     setShowNewCasePrompt(false);
@@ -36,17 +39,36 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       return;
     }
 
-    // Find in available profiles
-    const found = availableProfiles.find(
+    // 1. Check local profiles first
+    const foundLocal = availableProfiles.find(
       (p) => p.name.trim() === trimmedName && normalizeBirthday(p.birthday) === cleanBday
     );
 
-    if (found) {
-      onLoginSuccess(found);
-    } else {
-      setErrorMessage(`未找到「${trimmedName}」的歷史紀錄。`);
-      setShowNewCasePrompt(true);
+    if (foundLocal) {
+      onLoginSuccess(foundLocal);
+      return;
     }
+
+    // 2. If not found locally, query Cloud Firestore for cross-device sync!
+    setIsSearchingCloud(true);
+    try {
+      const cloudResult = await findCaseInCloudByCredentials(trimmedName, cleanBday);
+      if (cloudResult) {
+        // Save to local storage for caching
+        saveCaseFullData(cloudResult.profile.id, cloudResult.caseData);
+        const updatedList = [...availableProfiles.filter(p => p.id !== cloudResult.profile.id), cloudResult.profile];
+        saveStoredCaseList(updatedList);
+        setIsSearchingCloud(false);
+        onLoginSuccess(cloudResult.profile);
+        return;
+      }
+    } catch (err) {
+      console.warn('Cloud search error:', err);
+    }
+    setIsSearchingCloud(false);
+
+    setErrorMessage(`本機與雲端未找到「${trimmedName}」的歷史紀錄。`);
+    setShowNewCasePrompt(true);
   };
 
   const handleCreateNew = () => {
@@ -126,28 +148,42 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
 
           {/* If not found, provide 1-tap create */}
           {showNewCasePrompt && (
-            <div className="p-2.5 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900 space-y-1.5">
-              <div className="font-bold flex items-center gap-1">
-                <Info className="w-3.5 h-3.5 text-amber-600" />
-                是否為「{name}」建立獨立的新健康日誌？
+            <div className="p-3 bg-amber-50 rounded-xl border border-amber-200 text-xs text-amber-900 space-y-2">
+              <div className="font-bold flex items-center gap-1.5 text-amber-900">
+                <Info className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>此裝置尚未建立「{name}」的紀錄</span>
               </div>
+              <p className="text-[11px] text-amber-700 leading-relaxed">
+                若您是首次在此電腦/瀏覽器開啟，請點擊下方按鈕直接建立並登入：
+              </p>
               <button
                 type="button"
                 onClick={handleCreateNew}
-                className="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs flex items-center justify-center gap-1 shadow-xs"
+                className="w-full py-2 bg-amber-600 hover:bg-amber-700 text-white rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 shadow-xs transition-colors cursor-pointer"
               >
                 <UserPlus className="w-3.5 h-3.5" />
                 建立新日誌並登入
               </button>
+              <p className="text-[10px] text-slate-500 pt-0.5 leading-normal">
+                💡 欲同步手機上的歷史資料，可登入後透過右上角「☁️ 雲端圖示」匯入手機的備份檔。
+              </p>
             </div>
           )}
 
           {/* Requirement 3: 登入按鈕向右符號刪掉，僅保留「登入」兩字 */}
           <button
             type="submit"
-            className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl font-bold text-sm shadow-md hover:shadow-lg transition-all flex items-center justify-center active:scale-98"
+            disabled={isSearchingCloud}
+            className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-800 text-white rounded-xl font-bold text-sm shadow-md hover:shadow-lg transition-all flex items-center justify-center gap-2 active:scale-98 cursor-pointer"
           >
-            登入
+            {isSearchingCloud ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin text-white" />
+                <span>雲端同步比對中...</span>
+              </>
+            ) : (
+              '登入'
+            )}
           </button>
         </form>
       </div>
