@@ -1,0 +1,6 @@
+{
+  "name": "個案健康日誌 - 行動健康照護管家",
+  "description": "專為行動裝置與照護個案設計的健康日誌，整合生命徵象、回診紀錄、用藥紀錄與復健計畫追蹤。",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
