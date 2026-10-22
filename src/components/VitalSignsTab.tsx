@@ -519,9 +519,9 @@ export const VitalSignsTab: React.FC<VitalSignsTabProps> = ({
 
             {/* Modal Body */}
             <form onSubmit={handleSubmit} className="p-4 space-y-3.5 overflow-y-auto flex-1">
-              {/* Date & Time - Responsive single column on mobile to prevent overlapping */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                <div className="min-w-0">
+              {/* Date & Time - 永遠上下排序，寬度適中不超出手機螢幕 */}
+              <div className="space-y-2.5">
+                <div>
                   <label className="block text-[11px] font-semibold text-slate-700 mb-1">
                     量測日期
                   </label>
@@ -530,19 +530,19 @@ export const VitalSignsTab: React.FC<VitalSignsTabProps> = ({
                     required
                     value={recordDate}
                     onChange={(e) => setRecordDate(e.target.value)}
-                    className="w-full text-xs p-2.5 bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:bg-white focus:outline-none min-h-[40px] text-slate-800 font-medium"
+                    className="w-full text-xs py-2 px-3 bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:bg-white focus:outline-none min-h-[38px] text-slate-800 font-medium"
                   />
                 </div>
-                <div className="min-w-0">
+                <div>
                   <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-                    時間
+                    量測時間
                   </label>
                   <input
                     type="time"
                     required
                     value={recordTime}
                     onChange={(e) => setRecordTime(e.target.value)}
-                    className="w-full text-xs p-2.5 bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:bg-white focus:outline-none min-h-[40px] text-slate-800 font-medium"
+                    className="w-full text-xs py-2 px-3 bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:bg-white focus:outline-none min-h-[38px] text-slate-800 font-medium"
                   />
                 </div>
               </div>

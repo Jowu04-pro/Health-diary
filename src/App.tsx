@@ -236,7 +236,9 @@ export default function App() {
 
   // Register new case
   const handleRegisterNewCase = (name: string, birthday: string) => {
-    const newCaseId = `case-${Date.now()}`;
+    const normName = (name || '').trim().replace(/[\/\s#?\[\]]/g, '_');
+    const normBday = normalizeBirthday(birthday);
+    const newCaseId = `case_${normName}_${normBday}`;
     const accurateAge = calculateAge(birthday, 0);
     const newProfile: CaseProfile = {
       id: newCaseId,

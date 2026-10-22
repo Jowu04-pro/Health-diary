@@ -24,6 +24,8 @@ import {
 import { CaseProfile, VitalSignRecord, AppointmentRecord, MedicationItem, MedicationLog, RehabPlanItem } from '../types/health';
 import { getGivenName } from '../utils/nameHelper';
 import { generateMonthlyReportCanvas, downloadCanvasImage, shareCanvasImage } from '../utils/chartExportHelper';
+import { saveCaseToFirebase, syncProfilesToFirebase } from '../services/firebase';
+import { getStoredCaseList } from '../data/mockData';
 
 interface DataSyncModalProps {
   isOpen: boolean;
@@ -69,6 +71,35 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   const [copied, setCopied] = useState(false);
   const [importJson, setImportJson] = useState('');
   const [importError, setImportError] = useState('');
+  const [isManualSyncing, setIsManualSyncing] = useState(false);
+  const [manualSyncMsg, setManualSyncMsg] = useState('');
+
+  const handleManualCloudSync = async () => {
+    setIsManualSyncing(true);
+    setManualSyncMsg('');
+    try {
+      const allProfiles = getStoredCaseList();
+      await syncProfilesToFirebase(allProfiles);
+      const fullData = {
+        profile: caseProfile,
+        vitals: vitalSigns,
+        appointments,
+        medications,
+        medLogs,
+        rehab: rehabPlans,
+      };
+      const ok = await saveCaseToFirebase(caseProfile.id, fullData);
+      if (ok) {
+        setManualSyncMsg('✅ 已成功上傳！已同步至 Firebase 雲端資料庫（Firestore）。');
+      } else {
+        setManualSyncMsg('❌ 上傳時發生錯誤，請檢查網路連線或規則設定。');
+      }
+    } catch (err: any) {
+      setManualSyncMsg('❌ 上傳失敗：' + (err?.message || '未知錯誤'));
+    } finally {
+      setIsManualSyncing(false);
+    }
+  };
 
   // Extract available months from records
   const availableMonths = useMemo(() => {
@@ -419,6 +450,29 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                   <div>• 用藥品項: {medications.length} 項</div>
                   <div>• 復健計畫: {rehabPlans.length} 個</div>
                 </div>
+              </div>
+
+              {/* Manual Cloud Push Button */}
+              <div className="space-y-1.5 pt-1">
+                <button
+                  type="button"
+                  disabled={isManualSyncing}
+                  onClick={handleManualCloudSync}
+                  className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-800 text-white rounded-xl font-bold text-xs shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer active:scale-98"
+                >
+                  <Cloud className="w-4 h-4" />
+                  <span>{isManualSyncing ? '正在同步至 Firebase 雲端...' : '立即將本機日誌上傳至 Firebase 雲端'}</span>
+                </button>
+
+                {manualSyncMsg && (
+                  <div className={`p-2 rounded-xl text-xs font-semibold leading-relaxed ${
+                    manualSyncMsg.startsWith('✅') 
+                      ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
+                      : 'bg-rose-50 text-rose-800 border border-rose-200'
+                  }`}>
+                    {manualSyncMsg}
+                  </div>
+                )}
               </div>
 
               {/* Fast Tools */}

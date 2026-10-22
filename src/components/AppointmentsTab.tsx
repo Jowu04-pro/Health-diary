@@ -672,9 +672,9 @@ export const AppointmentsTab: React.FC<AppointmentsTabProps> = ({
                 </div>
               </div>
 
-              {/* Date & Time - Responsive single column on mobile to prevent overlapping */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                <div className="min-w-0">
+              {/* Date & Time - 永遠上下排序，寬度適中不超出手機螢幕 */}
+              <div className="space-y-2.5">
+                <div>
                   <label className="block text-[11px] font-semibold text-slate-700 mb-1">
                     {modalVisitType === 'emergency' ? '送醫日期 (必填)' : '回診日期 (必填)'}
                   </label>
@@ -683,10 +683,10 @@ export const AppointmentsTab: React.FC<AppointmentsTabProps> = ({
                     required
                     value={date}
                     onChange={(e) => setDate(e.target.value)}
-                    className="w-full text-xs p-2.5 bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white focus:outline-none min-h-[40px] text-slate-800 font-medium"
+                    className="w-full text-xs py-2 px-3 bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white focus:outline-none min-h-[38px] text-slate-800 font-medium"
                   />
                 </div>
-                <div className="min-w-0">
+                <div>
                   <label className="block text-[11px] font-semibold text-slate-700 mb-1">
                     {modalVisitType === 'emergency' ? '到院時間' : '看診時間'}
                   </label>
@@ -694,7 +694,7 @@ export const AppointmentsTab: React.FC<AppointmentsTabProps> = ({
                     type="time"
                     value={time}
                     onChange={(e) => setTime(e.target.value)}
-                    className="w-full text-xs p-2.5 bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white focus:outline-none min-h-[40px] text-slate-800 font-medium"
+                    className="w-full text-xs py-2 px-3 bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white focus:outline-none min-h-[38px] text-slate-800 font-medium"
                   />
                 </div>
               </div>

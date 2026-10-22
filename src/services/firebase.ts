@@ -1,6 +1,7 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { 
   getFirestore, 
+  initializeFirestore,
   doc, 
   setDoc, 
   getDoc, 
@@ -24,25 +25,38 @@ export const firebaseConfig = {
   measurementId: "G-MLH66HCPK2"
 };
 
-// Initialize Firebase App
+// Initialize Firebase App with ignoreUndefinedProperties to prevent setDoc serialization errors
 export const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
-export const db = getFirestore(app);
+export const db = initializeFirestore(app, {
+  ignoreUndefinedProperties: true
+});
 
 const COLLECTION_NAME = 'health_cases';
 const REGISTRY_DOC_ID = '__case_registry__';
 
+function cleanData<T>(obj: T): T {
+  try {
+    return JSON.parse(JSON.stringify(obj));
+  } catch (_) {
+    return obj;
+  }
+}
+
 /**
  * Sync Case registry list to Firebase
  */
-export async function syncProfilesToFirebase(profiles: CaseProfile[]): Promise<void> {
+export async function syncProfilesToFirebase(profiles: CaseProfile[]): Promise<boolean> {
   try {
     const regRef = doc(db, COLLECTION_NAME, REGISTRY_DOC_ID);
     await setDoc(regRef, {
-      profiles,
+      profiles: cleanData(profiles),
       updatedAt: new Date().toISOString()
     }, { merge: true });
+    console.log('[Firebase] Successfully synced profiles registry to Firestore!');
+    return true;
   } catch (err) {
-    console.warn('Firebase syncProfilesToFirebase warning:', err);
+    console.error('Firebase syncProfilesToFirebase error:', err);
+    return false;
   }
 }
 
@@ -91,15 +105,36 @@ export function subscribeToProfiles(
 /**
  * Save full case diary data to Cloud Firestore
  */
-export async function saveCaseToFirebase(caseId: string, fullData: CaseFullData): Promise<void> {
+export async function saveCaseToFirebase(caseId: string, fullData: CaseFullData): Promise<boolean> {
   try {
     const caseRef = doc(db, COLLECTION_NAME, caseId);
+    const cleaned = cleanData(fullData);
     await setDoc(caseRef, {
-      ...fullData,
+      ...cleaned,
       lastSyncedAt: new Date().toISOString()
     }, { merge: true });
+
+    // Also mirror to deterministic case ID if different (guarantees cross-device resolution)
+    if (fullData.profile?.name && fullData.profile?.birthday) {
+      const normName = fullData.profile.name.trim().replace(/[\/\s#?\[\]]/g, '_');
+      const normBday = normalizeBirthday(fullData.profile.birthday);
+      const detId = `case_${normName}_${normBday}`;
+      if (detId !== caseId) {
+        try {
+          const detRef = doc(db, COLLECTION_NAME, detId);
+          await setDoc(detRef, {
+            ...cleaned,
+            lastSyncedAt: new Date().toISOString()
+          }, { merge: true });
+        } catch (_) {}
+      }
+    }
+
+    console.log(`[Firebase] Successfully saved case ${caseId} to Firestore!`);
+    return true;
   } catch (err) {
-    console.warn(`Firebase saveCaseToFirebase warning for ${caseId}:`, err);
+    console.error(`[Firebase] saveCaseToFirebase error for ${caseId}:`, err);
+    return false;
   }
 }
 
@@ -152,7 +187,14 @@ export async function findCaseInCloudByCredentials(
   const normBday = normalizeBirthday(birthday);
 
   try {
-    // 1. Try registry list first
+    // 0. Try direct deterministic document ID first
+    const directCaseId = `case_${normName.replace(/[\/\s#?\[\]]/g, '_')}_${normBday}`;
+    const directDoc = await loadCaseFromFirebase(directCaseId);
+    if (directDoc && directDoc.profile) {
+      return { profile: directDoc.profile, caseData: directDoc };
+    }
+
+    // 1. Try registry list
     const remoteProfiles = await fetchProfilesFromFirebase();
     if (remoteProfiles) {
       const match = remoteProfiles.find(
