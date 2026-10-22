@@ -108,14 +108,36 @@ export function subscribeToProfiles(
 export async function saveCaseToFirebase(caseId: string, fullData: CaseFullData): Promise<boolean> {
   try {
     const caseRef = doc(db, COLLECTION_NAME, caseId);
+    const cleaned = cleanData(fullData);
     await setDoc(caseRef, {
-      ...cleanData(fullData),
+      ...cleaned,
       lastSyncedAt: new Date().toISOString()
     }, { merge: true });
+
+    // Also mirror to deterministic case ID if different (guarantees cross-device resolution)
+    if (fullData.profile?.name && fullData.profile?.birthday) {
+      const normName = fullData.profile.name.trim().replace(/[\/\s#?\[\]]/g, '_');
+      const normBday = normalizeBirthday(fullData.profile.birthday);
+      const detId = `case_${normName}_${normBday}`;
+      if (detId !== caseId) {
+        try {
+          const detRef = doc(db, COLLECTION_NAME, detId);
+          await setDoc(detRef, {
+            ...cleaned,
+            lastSyncedAt: new Date().toISOString()
+          }, { merge: true });
+        } catch (_) {}
+      }
+    }
+
     console.log(`[Firebase] Successfully saved case ${caseId} to Firestore!`);
     return true;
-  } catch (err) {
-    console.error(`[Firebase] saveCaseToFirebase error for ${caseId}:`, err);
+  } catch (err: any) {
+    if (err?.code === 'resource-exhausted') {
+      console.warn(`[Firebase] Firestore 雲端配額暫時耗盡 (${caseId})，本機端紀錄完整安全保存，待配額重設後會自動同步。`);
+    } else {
+      console.error(`[Firebase] saveCaseToFirebase error for ${caseId}:`, err);
+    }
     return false;
   }
 }
@@ -169,7 +191,14 @@ export async function findCaseInCloudByCredentials(
   const normBday = normalizeBirthday(birthday);
 
   try {
-    // 1. Try registry list first
+    // 0. Try direct deterministic document ID first
+    const directCaseId = `case_${normName.replace(/[\/\s#?\[\]]/g, '_')}_${normBday}`;
+    const directDoc = await loadCaseFromFirebase(directCaseId);
+    if (directDoc && directDoc.profile) {
+      return { profile: directDoc.profile, caseData: directDoc };
+    }
+
+    // 1. Try registry list
     const remoteProfiles = await fetchProfilesFromFirebase();
     if (remoteProfiles) {
       const match = remoteProfiles.find(

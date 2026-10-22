@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   TabType, 
   CaseProfile, 
@@ -39,7 +39,38 @@ import { CaseProfileModal } from './components/CaseProfileModal';
 import { DataSyncModal } from './components/DataSyncModal';
 import { LoginScreen } from './components/LoginScreen';
 import { Wifi, Battery, Signal, Check } from 'lucide-react';
-import { getGivenName, calculateAge } from './utils/nameHelper';
+import { getGivenName, calculateAge, normalizeBirthday } from './utils/nameHelper';
+
+function serializeCaseData(
+  profile: CaseProfile | null,
+  vitals: VitalSignRecord[],
+  appointments: AppointmentRecord[],
+  medications: MedicationItem[],
+  medLogs: MedicationLog[],
+  rehab: RehabPlanItem[]
+): string {
+  if (!profile) return '';
+  return JSON.stringify({
+    pid: profile.id,
+    pName: profile.name,
+    pBday: profile.birthday,
+    pAge: profile.age,
+    pGender: profile.gender,
+    pHeight: profile.height,
+    pWeight: profile.weight,
+    pBloodType: profile.bloodType,
+    pDiag: profile.primaryDiagnosis,
+    pAllergies: profile.allergies,
+    pCaregiver: profile.primaryCaregiver,
+    pPhone: profile.contactPhone,
+    pNotes: profile.notes,
+    vitals,
+    appointments,
+    medications,
+    medLogs,
+    rehab,
+  });
+}
 
 export default function App() {
   // Mobile casing frame mode toggle (Defaults to true on larger screens, false on smaller)
@@ -96,20 +127,36 @@ export default function App() {
   // Cloud Sync Status ('synced' | 'syncing' | 'offline')
   const [cloudSyncStatus, setCloudSyncStatus] = useState<'synced' | 'syncing' | 'offline'>('synced');
 
+  // Anti-loop sync tracking refs
+  const lastCloudHashRef = useRef<string>('');
+  const isIncomingRemoteUpdateRef = useRef<boolean>(false);
+  const cloudDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastProfilesStrRef = useRef<string>('');
+
   // Realtime subscription to Firebase case registry list
   useEffect(() => {
     const unsub = subscribeToProfiles((remoteProfiles) => {
       if (remoteProfiles && remoteProfiles.length > 0) {
+        const str = JSON.stringify(remoteProfiles);
+        if (str === lastProfilesStrRef.current) return;
+        lastProfilesStrRef.current = str;
+
         setProfiles((prev) => {
           const merged = [...prev];
+          let changed = false;
           remoteProfiles.forEach((rp) => {
             const idx = merged.findIndex((p) => p.id === rp.id);
             if (idx >= 0) {
-              merged[idx] = { ...merged[idx], ...rp };
+              if (JSON.stringify(merged[idx]) !== JSON.stringify(rp)) {
+                merged[idx] = { ...merged[idx], ...rp };
+                changed = true;
+              }
             } else {
               merged.push(rp);
+              changed = true;
             }
           });
+          if (!changed) return prev;
           saveStoredCaseList(merged);
           return merged;
         });
@@ -125,61 +172,37 @@ export default function App() {
   const [medLogs, setMedLogs] = useState<MedicationLog[]>([]);
   const [rehabPlans, setRehabPlans] = useState<RehabPlanItem[]>([]);
 
-  // When activeProfile changes, load its independent diary data and sync profile
+  // When activeProfile changes, load its independent diary data from localStorage
   useEffect(() => {
     if (activeProfile) {
       localStorage.setItem('case_diary_active_id', activeProfile.id);
       const caseData = loadCaseFullData(activeProfile.id);
 
-      // Verify and merge profile data from storage if it has latest edited fields
-      const storedProfile = caseData.profile || activeProfile;
-      const accurateAge = calculateAge(storedProfile.birthday, storedProfile.age);
+      const vitals = caseData.vitals || [];
+      const appts = caseData.appointments || [];
+      const meds = caseData.medications || [];
+      const logs = caseData.medLogs || [];
+      const rehab = caseData.rehab || [];
 
-      if (
-        storedProfile.height !== activeProfile.height ||
-        storedProfile.weight !== activeProfile.weight ||
-        storedProfile.bloodType !== activeProfile.bloodType ||
-        storedProfile.gender !== activeProfile.gender ||
-        storedProfile.name !== activeProfile.name ||
-        storedProfile.birthday !== activeProfile.birthday ||
-        JSON.stringify(storedProfile.allergies || []) !== JSON.stringify(activeProfile.allergies || []) ||
-        storedProfile.primaryCaregiver !== activeProfile.primaryCaregiver ||
-        storedProfile.contactPhone !== activeProfile.contactPhone ||
-        storedProfile.notes !== activeProfile.notes ||
-        accurateAge !== activeProfile.age
-      ) {
-        const synced = { ...storedProfile, age: accurateAge };
-        setActiveProfile(synced);
-        setProfiles((prev) => {
-          const next = prev.map((p) => (p.id === activeProfile.id ? synced : p));
-          saveStoredCaseList(next);
-          return next;
-        });
-      }
-
-      setVitalSigns(caseData.vitals || []);
-      setAppointments(caseData.appointments || []);
-      setMedications(caseData.medications || []);
-      setMedLogs(caseData.medLogs || []);
-      setRehabPlans(caseData.rehab || []);
+      setVitalSigns(vitals);
+      setAppointments(appts);
+      setMedications(meds);
+      setMedLogs(logs);
+      setRehabPlans(rehab);
       setCurrentTab('overview');
 
-      // Also try fetching newest from Firestore in case updated on another device
-      loadCaseFromFirebase(activeProfile.id).then((remoteData) => {
-        if (remoteData) {
-          if (remoteData.vitals) setVitalSigns(remoteData.vitals);
-          if (remoteData.appointments) setAppointments(remoteData.appointments);
-          if (remoteData.medications) setMedications(remoteData.medications);
-          if (remoteData.medLogs) setMedLogs(remoteData.medLogs);
-          if (remoteData.rehab) setRehabPlans(remoteData.rehab);
-          if (remoteData.profile) {
-            const accAge = calculateAge(remoteData.profile.birthday, remoteData.profile.age);
-            setActiveProfile((prev) => (prev ? { ...remoteData.profile, age: accAge } : prev));
-          }
-        }
-      }).catch(() => {});
+      // Seed current local state hash to avoid pushing identical state on initial load
+      lastCloudHashRef.current = serializeCaseData(
+        activeProfile,
+        vitals,
+        appts,
+        meds,
+        logs,
+        rehab
+      );
     } else {
       localStorage.removeItem('case_diary_active_id');
+      lastCloudHashRef.current = '';
     }
   }, [activeProfile?.id]);
 
@@ -187,41 +210,123 @@ export default function App() {
   useEffect(() => {
     if (!activeProfile?.id) return;
     const unsub = subscribeToCaseData(activeProfile.id, (remoteData) => {
-      if (remoteData) {
-        if (remoteData.vitals) setVitalSigns(remoteData.vitals);
-        if (remoteData.appointments) setAppointments(remoteData.appointments);
-        if (remoteData.medications) setMedications(remoteData.medications);
-        if (remoteData.medLogs) setMedLogs(remoteData.medLogs);
-        if (remoteData.rehab) setRehabPlans(remoteData.rehab);
-        if (remoteData.profile) {
-          const accAge = calculateAge(remoteData.profile.birthday, remoteData.profile.age);
-          setActiveProfile((prev) => (prev ? { ...remoteData.profile, age: accAge } : prev));
-        }
-        setCloudSyncStatus('synced');
+      if (!remoteData) return;
+
+      const remoteHash = serializeCaseData(
+        remoteData.profile || null,
+        remoteData.vitals || [],
+        remoteData.appointments || [],
+        remoteData.medications || [],
+        remoteData.medLogs || [],
+        remoteData.rehab || []
+      );
+
+      // Do nothing if incoming data matches what we already have or just sent
+      if (remoteHash === lastCloudHashRef.current) {
+        return;
       }
+
+      // Mark that we are applying remote updates to suppress pushing back to Firestore
+      isIncomingRemoteUpdateRef.current = true;
+      lastCloudHashRef.current = remoteHash;
+
+      if (remoteData.vitals) {
+        setVitalSigns((prev) => (JSON.stringify(prev) === JSON.stringify(remoteData.vitals) ? prev : remoteData.vitals));
+      }
+      if (remoteData.appointments) {
+        setAppointments((prev) => (JSON.stringify(prev) === JSON.stringify(remoteData.appointments) ? prev : remoteData.appointments));
+      }
+      if (remoteData.medications) {
+        setMedications((prev) => (JSON.stringify(prev) === JSON.stringify(remoteData.medications) ? prev : remoteData.medications));
+      }
+      if (remoteData.medLogs) {
+        setMedLogs((prev) => (JSON.stringify(prev) === JSON.stringify(remoteData.medLogs) ? prev : remoteData.medLogs));
+      }
+      if (remoteData.rehab) {
+        setRehabPlans((prev) => (JSON.stringify(prev) === JSON.stringify(remoteData.rehab) ? prev : remoteData.rehab));
+      }
+      if (remoteData.profile) {
+        const accAge = calculateAge(remoteData.profile.birthday, remoteData.profile.age);
+        const nextProfile = { ...remoteData.profile, age: accAge };
+        setActiveProfile((prev) => {
+          if (!prev) return nextProfile;
+          if (JSON.stringify(prev) === JSON.stringify(nextProfile)) return prev;
+          return nextProfile;
+        });
+      }
+
+      // Cache to localStorage
+      saveCaseFullData(activeProfile.id, {
+        profile: remoteData.profile || activeProfile,
+        vitals: remoteData.vitals || [],
+        appointments: remoteData.appointments || [],
+        medications: remoteData.medications || [],
+        medLogs: remoteData.medLogs || [],
+        rehab: remoteData.rehab || [],
+      });
+      setCloudSyncStatus('synced');
     });
     return () => unsub();
   }, [activeProfile?.id]);
 
-  // Persist current case data whenever any field updates (both LocalStorage and Cloud Firestore)
+  // Persist current case data whenever any field updates (debounced and loop-protected)
   useEffect(() => {
-    if (activeProfile) {
-      const fullData = {
-        profile: activeProfile,
-        vitals: vitalSigns,
-        appointments,
-        medications,
-        medLogs,
-        rehab: rehabPlans,
-      };
-      saveCaseFullData(activeProfile.id, fullData);
+    if (!activeProfile) return;
 
-      // Push to Cloud Firestore
-      setCloudSyncStatus('syncing');
-      saveCaseToFirebase(activeProfile.id, fullData)
-        .then(() => setCloudSyncStatus('synced'))
-        .catch(() => setCloudSyncStatus('synced'));
+    const currentHash = serializeCaseData(
+      activeProfile,
+      vitalSigns,
+      appointments,
+      medications,
+      medLogs,
+      rehabPlans
+    );
+
+    const fullData = {
+      profile: activeProfile,
+      vitals: vitalSigns,
+      appointments,
+      medications,
+      medLogs,
+      rehab: rehabPlans,
+    };
+
+    // Always keep localStorage updated synchronously
+    saveCaseFullData(activeProfile.id, fullData);
+
+    // If this update was triggered by receiving data from Firestore, DO NOT push it back!
+    if (isIncomingRemoteUpdateRef.current) {
+      isIncomingRemoteUpdateRef.current = false;
+      return;
     }
+
+    // If local state is identical to cloud state, no network write is needed
+    if (currentHash === lastCloudHashRef.current) {
+      return;
+    }
+
+    // Debounce cloud write (1500ms) to prevent quota flooding
+    if (cloudDebounceTimerRef.current) {
+      clearTimeout(cloudDebounceTimerRef.current);
+    }
+
+    setCloudSyncStatus('syncing');
+    cloudDebounceTimerRef.current = setTimeout(async () => {
+      try {
+        lastCloudHashRef.current = currentHash;
+        await saveCaseToFirebase(activeProfile.id, fullData);
+        setCloudSyncStatus('synced');
+      } catch (err: any) {
+        console.warn('Auto sync warning:', err?.message || err);
+        setCloudSyncStatus('synced');
+      }
+    }, 1500);
+
+    return () => {
+      if (cloudDebounceTimerRef.current) {
+        clearTimeout(cloudDebounceTimerRef.current);
+      }
+    };
   }, [activeProfile, vitalSigns, appointments, medications, medLogs, rehabPlans]);
 
   // Login handler
@@ -236,7 +341,9 @@ export default function App() {
 
   // Register new case
   const handleRegisterNewCase = (name: string, birthday: string) => {
-    const newCaseId = `case-${Date.now()}`;
+    const normName = (name || '').trim().replace(/[\/\s#?\[\]]/g, '_');
+    const normBday = normalizeBirthday(birthday);
+    const newCaseId = `case_${normName}_${normBday}`;
     const accurateAge = calculateAge(birthday, 0);
     const newProfile: CaseProfile = {
       id: newCaseId,
