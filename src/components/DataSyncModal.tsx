@@ -88,11 +88,13 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
         medLogs,
         rehab: rehabPlans,
       };
-      const ok = await saveCaseToFirebase(caseProfile.id, fullData);
-      if (ok) {
+      const res = await saveCaseToFirebase(caseProfile.id, fullData);
+      if (res.success) {
         setManualSyncMsg('✅ 已成功上傳！已同步至 Firebase 雲端資料庫（Firestore）。');
+      } else if (res.isQuotaExceeded) {
+        setManualSyncMsg('⚠️ Firebase 雲端免費方案今日配額暫時耗盡（Quota Exceeded）。Google 將於每日午夜重置。您的日誌已完整安全存在手機中，亦可使用「資料備份」分頁一鍵複製移轉！');
       } else {
-        setManualSyncMsg('❌ 上傳時發生錯誤，請檢查網路連線或規則設定。');
+        setManualSyncMsg(`❌ 上傳失敗：${res.error || '請檢查網路連線或稍後再試'}`);
       }
     } catch (err: any) {
       setManualSyncMsg('❌ 上傳失敗：' + (err?.message || '未知錯誤'));
@@ -216,8 +218,8 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 animate-in fade-in duration-200">
-      <div className="bg-white w-full max-w-md rounded-3xl max-h-[90vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto animate-in fade-in duration-200">
+      <div className="bg-white w-[94vw] max-w-md rounded-3xl max-h-[90vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between p-3.5 border-b border-slate-200 bg-slate-50/70">
           <div className="flex items-center space-x-2">

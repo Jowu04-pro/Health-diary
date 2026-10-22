@@ -501,8 +501,8 @@ export const VitalSignsTab: React.FC<VitalSignsTabProps> = ({
 
       {/* Add Record Modal */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3.5">
-          <div className="bg-white w-full max-w-sm rounded-3xl max-h-[85vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white w-[94vw] max-w-sm rounded-3xl max-h-[88vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden mx-auto">
             {/* Modal Header */}
             <div className="flex items-center justify-between p-4 border-b border-slate-200">
               <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
@@ -518,8 +518,8 @@ export const VitalSignsTab: React.FC<VitalSignsTabProps> = ({
             </div>
 
             {/* Modal Body */}
-            <form onSubmit={handleSubmit} className="p-4 space-y-3.5 overflow-y-auto flex-1">
-              {/* Date & Time - 永遠上下排序，寬度適中不超出手機螢幕 */}
+            <form onSubmit={handleSubmit} className="p-4 space-y-3.5 overflow-y-auto overflow-x-hidden flex-1 max-w-full">
+              {/* Date & Time - 永遠上下排序，縮短寬度，不超出手機螢幕 */}
               <div className="space-y-2.5">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-700 mb-1">
@@ -530,7 +530,7 @@ export const VitalSignsTab: React.FC<VitalSignsTabProps> = ({
                     required
                     value={recordDate}
                     onChange={(e) => setRecordDate(e.target.value)}
-                    className="w-full text-xs py-2 px-3 bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:bg-white focus:outline-none min-h-[38px] text-slate-800 font-medium"
+                    className="w-full max-w-[190px] sm:max-w-[210px] text-xs py-2 px-3 bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:bg-white focus:outline-none min-h-[38px] text-slate-800 font-medium box-border block"
                   />
                 </div>
                 <div>
@@ -542,7 +542,7 @@ export const VitalSignsTab: React.FC<VitalSignsTabProps> = ({
                     required
                     value={recordTime}
                     onChange={(e) => setRecordTime(e.target.value)}
-                    className="w-full text-xs py-2 px-3 bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:bg-white focus:outline-none min-h-[38px] text-slate-800 font-medium"
+                    className="w-full max-w-[140px] sm:max-w-[160px] text-xs py-2 px-3 bg-slate-50 border border-slate-300 rounded-xl focus:ring-2 focus:ring-emerald-500 focus:bg-white focus:outline-none min-h-[38px] text-slate-800 font-medium box-border block"
                   />
                 </div>
               </div>

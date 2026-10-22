@@ -32,7 +32,7 @@ export const db = initializeFirestore(app, {
 });
 
 const COLLECTION_NAME = 'health_cases';
-const REGISTRY_DOC_ID = '__case_registry__';
+const REGISTRY_DOC_ID = 'case_registry';
 
 function cleanData<T>(obj: T): T {
   try {
@@ -42,10 +42,16 @@ function cleanData<T>(obj: T): T {
   }
 }
 
+export interface CloudSyncResult {
+  success: boolean;
+  error?: string;
+  isQuotaExceeded?: boolean;
+}
+
 /**
  * Sync Case registry list to Firebase
  */
-export async function syncProfilesToFirebase(profiles: CaseProfile[]): Promise<boolean> {
+export async function syncProfilesToFirebase(profiles: CaseProfile[]): Promise<CloudSyncResult> {
   try {
     const regRef = doc(db, COLLECTION_NAME, REGISTRY_DOC_ID);
     await setDoc(regRef, {
@@ -53,10 +59,15 @@ export async function syncProfilesToFirebase(profiles: CaseProfile[]): Promise<b
       updatedAt: new Date().toISOString()
     }, { merge: true });
     console.log('[Firebase] Successfully synced profiles registry to Firestore!');
-    return true;
-  } catch (err) {
-    console.error('Firebase syncProfilesToFirebase error:', err);
-    return false;
+    return { success: true };
+  } catch (err: any) {
+    const isQuota = err?.code === 'resource-exhausted' || err?.message?.includes('RESOURCE_EXHAUSTED');
+    if (isQuota) {
+      console.warn('[Firebase] Firestore 雲端配額暫時耗盡 (syncProfilesToFirebase)');
+    } else {
+      console.error('Firebase syncProfilesToFirebase error:', err);
+    }
+    return { success: false, error: err?.message, isQuotaExceeded: isQuota };
   }
 }
 
@@ -105,7 +116,7 @@ export function subscribeToProfiles(
 /**
  * Save full case diary data to Cloud Firestore
  */
-export async function saveCaseToFirebase(caseId: string, fullData: CaseFullData): Promise<boolean> {
+export async function saveCaseToFirebase(caseId: string, fullData: CaseFullData): Promise<CloudSyncResult> {
   try {
     const caseRef = doc(db, COLLECTION_NAME, caseId);
     const cleaned = cleanData(fullData);
@@ -131,10 +142,15 @@ export async function saveCaseToFirebase(caseId: string, fullData: CaseFullData)
     }
 
     console.log(`[Firebase] Successfully saved case ${caseId} to Firestore!`);
-    return true;
-  } catch (err) {
-    console.error(`[Firebase] saveCaseToFirebase error for ${caseId}:`, err);
-    return false;
+    return { success: true };
+  } catch (err: any) {
+    const isQuota = err?.code === 'resource-exhausted' || err?.message?.includes('RESOURCE_EXHAUSTED');
+    if (isQuota) {
+      console.warn(`[Firebase] Firestore 雲端配額暫時耗盡 (${caseId})，本機端紀錄完整安全保存。`);
+    } else {
+      console.error(`[Firebase] saveCaseToFirebase error for ${caseId}:`, err);
+    }
+    return { success: false, error: err?.message, isQuotaExceeded: isQuota };
   }
 }
 

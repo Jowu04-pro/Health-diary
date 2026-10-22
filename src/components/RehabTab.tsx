@@ -250,8 +250,8 @@ export const RehabTab: React.FC<RehabTabProps> = ({
 
       {/* Add Modal */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3.5">
-          <div className="bg-white w-full max-w-sm rounded-3xl max-h-[85vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white w-[94vw] max-w-sm rounded-3xl max-h-[85vh] flex flex-col shadow-2xl animate-in zoom-in-95 duration-200 overflow-hidden mx-auto">
             <div className="flex items-center justify-between p-4 border-b border-slate-200">
               <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
                 <Dumbbell className="w-5 h-5 text-amber-600" />
@@ -265,7 +265,7 @@ export const RehabTab: React.FC<RehabTabProps> = ({
               </button>
             </div>
 
-            <form onSubmit={handleAddSubmit} className="p-4 space-y-3 overflow-y-auto flex-1">
+            <form onSubmit={handleAddSubmit} className="p-4 space-y-3 overflow-y-auto overflow-x-hidden flex-1 max-w-full">
               <div>
                 <label className="block text-[11px] font-semibold text-slate-700 mb-1">
                   復健動作名稱 (必填)
