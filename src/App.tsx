@@ -210,6 +210,9 @@ export default function App() {
       // Proactively fetch freshest cloud state on mount/switch to ensure cross-device sync
       loadCaseFromFirebase(activeProfile.id)
         .then((remoteData) => {
+          // If the user already logged out in the meantime, discard response immediately
+          if (!localStorage.getItem('case_diary_active_id')) return;
+
           if (remoteData && (!remoteData.profile || remoteData.profile.id === activeProfile.id)) {
             const remoteHash = serializeCaseData(
               remoteData.profile || null,
@@ -234,6 +237,9 @@ export default function App() {
         .catch((e) => console.warn('Proactive cloud fetch warning:', e));
     } else {
       localStorage.removeItem('case_diary_active_id');
+      try {
+        sessionStorage.removeItem('case_diary_active_id');
+      } catch (_) {}
       lastCloudHashRef.current = '';
     }
   }, [activeProfile?.id]);
@@ -281,7 +287,9 @@ export default function App() {
         const accAge = calculateAge(remoteData.profile.birthday, remoteData.profile.age);
         const nextProfile = { ...remoteData.profile, age: accAge, id: activeProfile.id };
         setActiveProfile((prev) => {
-          if (!prev) return nextProfile;
+          // If the user has logged out (prev is null), never revive the profile from cloud listener
+          if (!prev) return null;
+          if (prev.id !== activeProfile.id) return prev;
           if (JSON.stringify(prev) === JSON.stringify(nextProfile)) return prev;
           return nextProfile;
         });
@@ -477,6 +485,20 @@ export default function App() {
 
   // Logout handler
   const handleLogout = () => {
+    // 1. Immediately and synchronously remove active case tracking from localStorage
+    try {
+      localStorage.removeItem('case_diary_active_id');
+      sessionStorage.removeItem('case_diary_active_id');
+    } catch (_) {}
+
+    // 2. Abort any pending background cloud push to prevent race conditions
+    if (cloudDebounceTimerRef.current) {
+      clearTimeout(cloudDebounceTimerRef.current);
+      cloudDebounceTimerRef.current = null;
+    }
+    lastCloudHashRef.current = '';
+
+    // 3. Save final current state to case cache
     if (activeProfile) {
       saveCaseFullData(activeProfile.id, {
         profile: activeProfile,
@@ -487,6 +509,14 @@ export default function App() {
         rehab: rehabPlans,
       });
     }
+
+    // 4. Reset in-memory health data so stale data is never shown
+    setVitalSigns([]);
+    setAppointments([]);
+    setMedications([]);
+    setMedLogs([]);
+    setRehabPlans([]);
+
     setProfiles(getStoredCaseList());
     setActiveProfile(null);
   };

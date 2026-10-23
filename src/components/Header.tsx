@@ -99,6 +99,7 @@ export const Header: React.FC<HeaderProps> = ({
 
           {/* Logout / Switch Case */}
           <button
+            type="button"
             onClick={onLogout}
             className="px-2 py-1.5 rounded-lg bg-emerald-800/80 hover:bg-rose-600 border border-white/20 text-white transition-colors text-xs font-bold cursor-pointer flex items-center gap-1 shadow-xs"
             title="登出 / 切換個案日誌"
