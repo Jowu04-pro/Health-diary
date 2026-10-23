@@ -72,6 +72,7 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   const [copied, setCopied] = useState(false);
   const [importJson, setImportJson] = useState('');
   const [importError, setImportError] = useState('');
+  const [importSuccess, setImportSuccess] = useState(false);
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
   const [resetFeedbackMsg, setResetFeedbackMsg] = useState('');
@@ -241,8 +242,6 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     downloadAnchor.click();
     downloadAnchor.remove();
   };
-
-  const [importSuccess, setImportSuccess] = useState(false);
 
   const handleExecuteImport = () => {
     try {
