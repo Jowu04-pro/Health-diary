@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { HeartPulse, User, Calendar, ShieldCheck, UserPlus, Info, CloudCheck, Loader2 } from 'lucide-react';
 import { CaseProfile } from '../types/health';
 import { normalizeBirthday } from '../utils/nameHelper';
-import { findCaseInCloudByCredentials } from '../services/firebase';
+import { findCaseInCloudByCredentials, loadCaseFromFirebase } from '../services/firebase';
 import { CaseFullData, saveCaseFullData, saveStoredCaseList } from '../data/mockData';
 
 interface LoginScreenProps {
@@ -39,33 +39,59 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       return;
     }
 
-    // 1. Check local profiles first
+    // 1. Check local profiles list first
     const foundLocal = availableProfiles.find(
       (p) => p.name.trim() === trimmedName && normalizeBirthday(p.birthday) === cleanBday
     );
 
-    if (foundLocal) {
-      onLoginSuccess(foundLocal);
-      return;
-    }
-
-    // 2. If not found locally, query Cloud Firestore for cross-device sync!
     setIsSearchingCloud(true);
     try {
+      if (foundLocal) {
+        // Attempt to fetch latest case document from Cloud Firestore for cross-device synchronization
+        const remoteData = await loadCaseFromFirebase(foundLocal.id);
+        if (remoteData) {
+          saveCaseFullData(foundLocal.id, remoteData);
+          setIsSearchingCloud(false);
+          onLoginSuccess(remoteData.profile || foundLocal);
+          return;
+        }
+
+        // If direct fetch returns null, try fuzzy credentials search in Firestore
+        const cloudResult = await findCaseInCloudByCredentials(trimmedName, cleanBday);
+        if (cloudResult) {
+          saveCaseFullData(cloudResult.profile.id, cloudResult.caseData);
+          setIsSearchingCloud(false);
+          onLoginSuccess(cloudResult.profile);
+          return;
+        }
+
+        // If offline or not in cloud, proceed with local profile
+        setIsSearchingCloud(false);
+        onLoginSuccess(foundLocal);
+        return;
+      }
+
+      // 2. If not found locally in availableProfiles, query Cloud Firestore for cross-device sync!
       const cloudResult = await findCaseInCloudByCredentials(trimmedName, cleanBday);
       if (cloudResult) {
         // Save to local storage for caching
         saveCaseFullData(cloudResult.profile.id, cloudResult.caseData);
-        const updatedList = [...availableProfiles.filter(p => p.id !== cloudResult.profile.id), cloudResult.profile];
+        const updatedList = [...availableProfiles.filter((p) => p.id !== cloudResult.profile.id), cloudResult.profile];
         saveStoredCaseList(updatedList);
         setIsSearchingCloud(false);
         onLoginSuccess(cloudResult.profile);
         return;
       }
     } catch (err) {
-      console.warn('Cloud search error:', err);
+      console.warn('Cloud search error during login:', err);
     }
     setIsSearchingCloud(false);
+
+    // If local was found but network failed, still permit login with local profile
+    if (foundLocal) {
+      onLoginSuccess(foundLocal);
+      return;
+    }
 
     setErrorMessage(`本機與雲端未找到「${trimmedName}」的歷史紀錄。`);
     setShowNewCasePrompt(true);

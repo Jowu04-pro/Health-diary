@@ -245,9 +245,9 @@ export default function App() {
       if (remoteData.rehab) {
         setRehabPlans((prev) => (JSON.stringify(prev) === JSON.stringify(remoteData.rehab) ? prev : remoteData.rehab));
       }
-      if (remoteData.profile) {
+      if (remoteData.profile && remoteData.profile.id === activeProfile.id) {
         const accAge = calculateAge(remoteData.profile.birthday, remoteData.profile.age);
-        const nextProfile = { ...remoteData.profile, age: accAge };
+        const nextProfile = { ...remoteData.profile, age: accAge, id: activeProfile.id };
         setActiveProfile((prev) => {
           if (!prev) return nextProfile;
           if (JSON.stringify(prev) === JSON.stringify(nextProfile)) return prev;
@@ -257,7 +257,7 @@ export default function App() {
 
       // Cache to localStorage
       saveCaseFullData(activeProfile.id, {
-        profile: remoteData.profile || activeProfile,
+        profile: (remoteData.profile && remoteData.profile.id === activeProfile.id) ? remoteData.profile : activeProfile,
         vitals: remoteData.vitals || [],
         appointments: remoteData.appointments || [],
         medications: remoteData.medications || [],
@@ -330,13 +330,35 @@ export default function App() {
   }, [activeProfile, vitalSigns, appointments, medications, medLogs, rehabPlans]);
 
   // Login handler
-  const handleLoginSuccess = (profile: CaseProfile) => {
-    // Read freshest profile from storage for this case
+  const handleLoginSuccess = async (profile: CaseProfile) => {
+    // Read freshest profile from storage for this case, strictly ensuring ID matches
     const caseData = loadCaseFullData(profile.id);
-    const freshest = caseData.profile || profile;
+    const freshest =
+      caseData.profile && caseData.profile.id === profile.id
+        ? caseData.profile
+        : profile;
     const accurateAge = calculateAge(freshest.birthday, freshest.age);
-    const finalProfile: CaseProfile = { ...freshest, age: accurateAge };
+    const finalProfile: CaseProfile = { ...freshest, age: accurateAge, id: profile.id };
     setActiveProfile(finalProfile);
+
+    // Immediately fetch from Cloud Firestore to ensure multi-device sync
+    try {
+      const remoteData = await loadCaseFromFirebase(profile.id);
+      if (remoteData) {
+        saveCaseFullData(profile.id, remoteData);
+        if (remoteData.vitals) setVitalSigns(remoteData.vitals);
+        if (remoteData.appointments) setAppointments(remoteData.appointments);
+        if (remoteData.medications) setMedications(remoteData.medications);
+        if (remoteData.medLogs) setMedLogs(remoteData.medLogs);
+        if (remoteData.rehab) setRehabPlans(remoteData.rehab);
+        if (remoteData.profile && remoteData.profile.id === profile.id) {
+          const accAge = calculateAge(remoteData.profile.birthday, remoteData.profile.age);
+          setActiveProfile({ ...remoteData.profile, age: accAge, id: profile.id });
+        }
+      }
+    } catch (err) {
+      console.warn('Initial cloud sync on login warning:', err);
+    }
   };
 
   // Register new case

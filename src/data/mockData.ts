@@ -544,12 +544,42 @@ export function saveStoredCaseList(profiles: CaseProfile[]): void {
   }
 }
 
+export function createEmptyCaseData(caseId: string, profile?: Partial<CaseProfile>): CaseFullData {
+  return {
+    profile: {
+      id: caseId,
+      name: profile?.name || '健康個案',
+      birthday: profile?.birthday || '1970-01-01',
+      gender: profile?.gender || 'other',
+      age: profile?.age || 50,
+      height: profile?.height || 165,
+      weight: profile?.weight || 60,
+      caseNumber: profile?.caseNumber || `HD-${new Date().getFullYear()}-${Math.floor(1000 + Math.random() * 9000)}`,
+      bloodType: profile?.bloodType || 'O型',
+      primaryDiagnosis: profile?.primaryDiagnosis || '日常健康追蹤',
+      allergies: profile?.allergies || [],
+      primaryCaregiver: profile?.primaryCaregiver || '主要照顧家屬',
+      contactPhone: profile?.contactPhone || '0900-000-000',
+      notes: profile?.notes || '個人健康日誌紀錄。'
+    },
+    vitals: [],
+    appointments: [],
+    medications: [],
+    medLogs: [],
+    rehab: []
+  };
+}
+
 export function loadCaseFullData(caseId: string): CaseFullData {
   try {
     const raw = localStorage.getItem(STORAGE_PREFIX + `data_${caseId}`);
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed) {
+        if (parsed.profile && parsed.profile.id && parsed.profile.id !== caseId) {
+          console.warn(`[Sync Guard] Mismatched profile ID in cache for ${caseId}, repairing profile.`);
+          parsed.profile.id = caseId;
+        }
         return parsed;
       }
     }
@@ -557,13 +587,25 @@ export function loadCaseFullData(caseId: string): CaseFullData {
     console.warn(`Error reading case data for ${caseId}:`, e);
   }
 
-  // Fallback to initial registry
+  // Fallback to initial registry only if specifically defined in seed list
   if (initialCaseRegistry[caseId]) {
     return initialCaseRegistry[caseId];
   }
 
-  // If unknown, fallback to Wang Da-Ming
-  return caseWangDaMing;
+  // If known in registered profiles, create clean empty case structure with their profile info
+  const storedProfiles = getStoredCaseList();
+  const existingProfile = storedProfiles.find((p) => p.id === caseId);
+  if (existingProfile) {
+    return createEmptyCaseData(caseId, existingProfile);
+  }
+
+  // Return Wang Da-Ming ONLY if specifically requested
+  if (caseId === caseWangDaMing.profile.id || caseId === 'case-wang') {
+    return caseWangDaMing;
+  }
+
+  // Never return Wang Da-Ming for custom / newly registered users!
+  return createEmptyCaseData(caseId);
 }
 
 export function saveCaseFullData(caseId: string, data: CaseFullData): void {
@@ -583,9 +625,9 @@ export function saveCaseFullData(caseId: string, data: CaseFullData): void {
     }
     const idx = list.findIndex((p) => p.id === caseId);
     if (idx >= 0) {
-      list[idx] = { ...list[idx], ...data.profile };
-    } else {
-      list.push(data.profile);
+      list[idx] = { ...list[idx], ...data.profile, id: caseId };
+    } else if (data.profile) {
+      list.push({ ...data.profile, id: caseId });
     }
     localStorage.setItem(STORAGE_PREFIX + 'registered_profiles', JSON.stringify(list));
   } catch (e) {
