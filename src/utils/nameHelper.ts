@@ -73,3 +73,20 @@ export function calculateAge(bdayStr: string, fallbackAge?: number): number {
 
   return age >= 0 ? age : (fallbackAge ?? 0);
 }
+
+/**
+ * Returns a deterministic, canonical case ID across all devices based on Name and Birthday.
+ * This guarantees Phone, Tablet, PC, and different browsers point to the exact same Firestore document.
+ */
+export function getCanonicalCaseId(name: string, birthday: string): string {
+  const normName = (name || '').trim().replace(/[\/\s#?\[\]]/g, '_');
+  const normBday = normalizeBirthday(birthday);
+
+  // Preserve preset aliases
+  if (normName === '王大明' && (normBday === '19620708' || normBday.startsWith('1962'))) return 'case-wang';
+  if (normName === '陳德榮' && (normBday === '19550315' || normBday.startsWith('1955'))) return 'case-chen';
+  if (normName === '李淑芬' && (normBday === '19581120' || normBday.startsWith('1958'))) return 'case-li';
+
+  return `case_${normName}_${normBday}`;
+}
+

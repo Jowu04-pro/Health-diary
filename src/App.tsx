@@ -19,14 +19,17 @@ import {
   saveStoredCaseList,
   loadCaseFullData,
   saveCaseFullData,
-  caseWangDaMing
+  caseWangDaMing,
+  createEmptyCaseData,
+  initialCaseRegistry
 } from './data/mockData';
 import {
   saveCaseToFirebase,
   loadCaseFromFirebase,
   subscribeToCaseData,
   syncProfilesToFirebase,
-  subscribeToProfiles
+  subscribeToProfiles,
+  resetCaseInFirebase
 } from './services/firebase';
 import { Header } from './components/Header';
 import { BottomNav } from './components/BottomNav';
@@ -39,7 +42,7 @@ import { CaseProfileModal } from './components/CaseProfileModal';
 import { DataSyncModal } from './components/DataSyncModal';
 import { LoginScreen } from './components/LoginScreen';
 import { Wifi, Battery, Signal, Check } from 'lucide-react';
-import { getGivenName, calculateAge, normalizeBirthday } from './utils/nameHelper';
+import { getGivenName, calculateAge, normalizeBirthday, getCanonicalCaseId } from './utils/nameHelper';
 
 function serializeCaseData(
   profile: CaseProfile | null,
@@ -91,7 +94,10 @@ export default function App() {
       const savedCaseId = localStorage.getItem('case_diary_active_id');
       if (savedCaseId) {
         const found = getStoredCaseList().find((p) => p.id === savedCaseId);
-        if (found) return found;
+        if (found) {
+          const canonicalId = getCanonicalCaseId(found.name, found.birthday);
+          return { ...found, id: canonicalId };
+        }
       }
     } catch (e) {
       // ignore
@@ -331,7 +337,7 @@ export default function App() {
       return;
     }
 
-    // Debounce cloud write (1500ms) to prevent quota flooding
+    // Debounce cloud write (400ms) for snappy real-time cross-device sync
     if (cloudDebounceTimerRef.current) {
       clearTimeout(cloudDebounceTimerRef.current);
     }
@@ -346,7 +352,7 @@ export default function App() {
         console.warn('Auto sync warning:', err?.message || err);
         setCloudSyncStatus('synced');
       }
-    }, 1500);
+    }, 400);
 
     return () => {
       if (cloudDebounceTimerRef.current) {
@@ -357,29 +363,30 @@ export default function App() {
 
   // Login handler
   const handleLoginSuccess = async (profile: CaseProfile) => {
-    // Read freshest profile from storage for this case, strictly ensuring ID matches
-    const caseData = loadCaseFullData(profile.id);
+    const canonicalId = getCanonicalCaseId(profile.name, profile.birthday);
+    const caseData = loadCaseFullData(canonicalId);
     const freshest =
-      caseData.profile && caseData.profile.id === profile.id
+      caseData.profile && caseData.profile.id === canonicalId
         ? caseData.profile
         : profile;
     const accurateAge = calculateAge(freshest.birthday, freshest.age);
-    const finalProfile: CaseProfile = { ...freshest, age: accurateAge, id: profile.id };
+    const finalProfile: CaseProfile = { ...freshest, age: accurateAge, id: canonicalId };
     setActiveProfile(finalProfile);
+    localStorage.setItem('case_diary_active_id', canonicalId);
 
     // Immediately fetch from Cloud Firestore to ensure multi-device sync
     try {
-      const remoteData = await loadCaseFromFirebase(profile.id);
+      const remoteData = await loadCaseFromFirebase(canonicalId);
       if (remoteData) {
-        saveCaseFullData(profile.id, remoteData);
+        saveCaseFullData(canonicalId, remoteData);
         if (remoteData.vitals) setVitalSigns(remoteData.vitals);
         if (remoteData.appointments) setAppointments(remoteData.appointments);
         if (remoteData.medications) setMedications(remoteData.medications);
         if (remoteData.medLogs) setMedLogs(remoteData.medLogs);
         if (remoteData.rehab) setRehabPlans(remoteData.rehab);
-        if (remoteData.profile && remoteData.profile.id === profile.id) {
+        if (remoteData.profile) {
           const accAge = calculateAge(remoteData.profile.birthday, remoteData.profile.age);
-          setActiveProfile({ ...remoteData.profile, age: accAge, id: profile.id });
+          setActiveProfile({ ...remoteData.profile, age: accAge, id: canonicalId });
         }
       }
     } catch (err) {
@@ -389,12 +396,10 @@ export default function App() {
 
   // Register new case
   const handleRegisterNewCase = (name: string, birthday: string) => {
-    const normName = (name || '').trim().replace(/[\/\s#?\[\]]/g, '_');
-    const normBday = normalizeBirthday(birthday);
-    const newCaseId = `case_${normName}_${normBday}`;
+    const canonicalId = getCanonicalCaseId(name, birthday);
     const accurateAge = calculateAge(birthday, 0);
     const newProfile: CaseProfile = {
-      id: newCaseId,
+      id: canonicalId,
       name,
       birthday,
       gender: 'other',
@@ -410,7 +415,7 @@ export default function App() {
       notes: '個人專屬健康日誌。'
     };
 
-    const updatedProfiles = [...profiles, newProfile];
+    const updatedProfiles = [...profiles.filter((p) => p.id !== canonicalId), newProfile];
     setProfiles(updatedProfiles);
     saveStoredCaseList(updatedProfiles);
 
@@ -423,29 +428,29 @@ export default function App() {
       rehab: [],
     };
 
-    // Initial empty template for new case
-    saveCaseFullData(newCaseId, initialData);
-
-    // Sync new case to Firebase Cloud Firestore
+    saveCaseFullData(canonicalId, initialData);
     syncProfilesToFirebase(updatedProfiles);
-    saveCaseToFirebase(newCaseId, initialData);
+    saveCaseToFirebase(canonicalId, initialData);
 
     setActiveProfile(newProfile);
+    localStorage.setItem('case_diary_active_id', canonicalId);
   };
 
   // Save edited profile handler
   const handleSaveProfile = (updated: CaseProfile) => {
+    const canonicalId = getCanonicalCaseId(updated.name, updated.birthday);
     const accurateAge = calculateAge(updated.birthday, updated.age);
-    const finalProfile: CaseProfile = { ...updated, age: accurateAge };
+    const finalProfile: CaseProfile = { ...updated, age: accurateAge, id: canonicalId };
 
     // 1. Update activeProfile in state
     setActiveProfile(finalProfile);
+    localStorage.setItem('case_diary_active_id', canonicalId);
 
     // 2. Update profiles list in state AND save to localStorage
-    const exists = profiles.some((p) => p.id === finalProfile.id);
-    const nextList = exists
-      ? profiles.map((p) => (p.id === finalProfile.id ? finalProfile : p))
-      : [...profiles, finalProfile];
+    const nextList = [
+      ...profiles.filter((p) => p.id !== canonicalId && p.id !== updated.id),
+      finalProfile
+    ];
     setProfiles(nextList);
     saveStoredCaseList(nextList);
 
@@ -458,9 +463,9 @@ export default function App() {
       medLogs,
       rehab: rehabPlans,
     };
-    saveCaseFullData(finalProfile.id, fullData);
+    saveCaseFullData(canonicalId, fullData);
     syncProfilesToFirebase(nextList);
-    saveCaseToFirebase(finalProfile.id, fullData);
+    saveCaseToFirebase(canonicalId, fullData);
 
     // 4. Close the edit profile modal
     setIsProfileOpen(false);
@@ -612,34 +617,75 @@ export default function App() {
       setActiveProfile(prof);
       setProfiles((prev) => prev.map((p) => (p.id === prof.id ? prof : p)));
     }
-    const vitals = data.vitals || data.vitalSigns;
-    if (vitals) setVitalSigns(vitals);
-    if (data.appointments) setAppointments(data.appointments);
-    if (data.medications) setMedications(data.medications);
-    if (data.medLogs) setMedLogs(data.medLogs);
-    const rehab = data.rehab || data.rehabPlans;
-    if (rehab) setRehabPlans(rehab);
+    const vitals = data.vitals || data.vitalSigns || [];
+    setVitalSigns(vitals);
+    const appts = data.appointments || [];
+    setAppointments(appts);
+    const meds = data.medications || [];
+    setMedications(meds);
+    const logs = data.medLogs || [];
+    setMedLogs(logs);
+    const rehab = data.rehab || data.rehabPlans || [];
+    setRehabPlans(rehab);
 
     if (activeProfile) {
-      saveCaseFullData(activeProfile.id, {
+      const full = {
         profile: prof || activeProfile,
-        vitals: vitals || vitalSigns,
-        appointments: data.appointments || appointments,
-        medications: data.medications || medications,
-        medLogs: data.medLogs || medLogs,
-        rehab: rehab || rehabPlans,
-      });
+        vitals,
+        appointments: appts,
+        medications: meds,
+        medLogs: logs,
+        rehab,
+      };
+      saveCaseFullData(activeProfile.id, full);
+      lastCloudHashRef.current = serializeCaseData(
+        full.profile,
+        vitals,
+        appts,
+        meds,
+        logs,
+        rehab
+      );
     }
   };
 
-  const handleResetDefault = () => {
+  const handleResetDefault = async () => {
     if (!activeProfile) return;
-    const initialData = loadCaseFullData(activeProfile.id);
-    setVitalSigns(initialData.vitals);
-    setAppointments(initialData.appointments);
-    setMedications(initialData.medications);
-    setMedLogs(initialData.medLogs);
-    setRehabPlans(initialData.rehab);
+    const canonicalId = getCanonicalCaseId(activeProfile.name, activeProfile.birthday);
+
+    // Unconditionally create clean empty case data (0 records) for this case profile
+    const resetData = createEmptyCaseData(canonicalId, activeProfile);
+
+    // 1. Immediately zero-out local React state
+    setVitalSigns([]);
+    setAppointments([]);
+    setMedications([]);
+    setMedLogs([]);
+    setRehabPlans([]);
+
+    // 2. Synchronously write to localStorage for both active and canonical IDs
+    saveCaseFullData(canonicalId, resetData);
+    if (activeProfile.id !== canonicalId) {
+      saveCaseFullData(activeProfile.id, resetData);
+    }
+
+    // 3. Update hash to prevent sync loops
+    lastCloudHashRef.current = serializeCaseData(
+      activeProfile,
+      resetData.vitals || [],
+      resetData.appointments || [],
+      resetData.medications || [],
+      resetData.medLogs || [],
+      resetData.rehab || []
+    );
+    isIncomingRemoteUpdateRef.current = true;
+
+    // 4. Reset in Cloud Firestore (clearing records and purging legacy duplicate documents)
+    await resetCaseInFirebase(activeProfile);
+
+    // 5. Show prominent success banner
+    setSaveSuccessMessage(`「${getGivenName(activeProfile.name)}」的健康紀錄已全部重置歸零！`);
+    setShowSaveSuccessDialog(true);
   };
 
   // Pending counts for badges

@@ -5,6 +5,7 @@ import {
   doc, 
   setDoc, 
   getDoc, 
+  deleteDoc,
   onSnapshot, 
   collection, 
   getDocs,
@@ -12,7 +13,7 @@ import {
 } from 'firebase/firestore';
 import { CaseProfile, VitalSignRecord, AppointmentRecord, MedicationItem, MedicationLog, RehabPlanItem } from '../types/health';
 import { CaseFullData, caseWangDaMing, caseChenDeRong, caseLiShuFen } from '../data/mockData';
-import { normalizeBirthday } from '../utils/nameHelper';
+import { normalizeBirthday, getCanonicalCaseId } from '../utils/nameHelper';
 
 // Firebase configuration from user's Firebase console
 export const firebaseConfig = {
@@ -118,30 +119,30 @@ export function subscribeToProfiles(
  */
 export async function saveCaseToFirebase(caseId: string, fullData: CaseFullData): Promise<CloudSyncResult> {
   try {
-    const caseRef = doc(db, COLLECTION_NAME, caseId);
     const cleaned = cleanData(fullData);
-    await setDoc(caseRef, {
+    const canonicalId = (fullData.profile?.name && fullData.profile?.birthday)
+      ? getCanonicalCaseId(fullData.profile.name, fullData.profile.birthday)
+      : caseId;
+
+    // 1. Always write to the canonical document ID
+    const canonicalRef = doc(db, COLLECTION_NAME, canonicalId);
+    await setDoc(canonicalRef, {
       ...cleaned,
       lastSyncedAt: new Date().toISOString()
     }, { merge: true });
 
-    // Also mirror to deterministic case ID if different (guarantees cross-device resolution)
-    if (fullData.profile?.name && fullData.profile?.birthday) {
-      const normName = fullData.profile.name.trim().replace(/[\/\s#?\[\]]/g, '_');
-      const normBday = normalizeBirthday(fullData.profile.birthday);
-      const detId = `case_${normName}_${normBday}`;
-      if (detId !== caseId) {
-        try {
-          const detRef = doc(db, COLLECTION_NAME, detId);
-          await setDoc(detRef, {
-            ...cleaned,
-            lastSyncedAt: new Date().toISOString()
-          }, { merge: true });
-        } catch (_) {}
-      }
+    // 2. If caller passed a legacy or different ID (e.g. timestamp ID), mirror it as well
+    if (caseId !== canonicalId) {
+      try {
+        const caseRef = doc(db, COLLECTION_NAME, caseId);
+        await setDoc(caseRef, {
+          ...cleaned,
+          lastSyncedAt: new Date().toISOString()
+        }, { merge: true });
+      } catch (_) {}
     }
 
-    console.log(`[Firebase] Successfully saved case ${caseId} to Firestore!`);
+    console.log(`[Firebase] Successfully saved case to canonical ${canonicalId} in Firestore!`);
     return { success: true };
   } catch (err: any) {
     const isQuota = err?.code === 'resource-exhausted' || err?.message?.includes('RESOURCE_EXHAUSTED');
@@ -164,6 +165,7 @@ export async function loadCaseFromFirebase(caseId: string): Promise<CaseFullData
     if (snap.exists()) {
       return snap.data() as CaseFullData;
     }
+    return null;
   } catch (err) {
     console.warn(`Firebase loadCaseFromFirebase warning for ${caseId}:`, err);
   }
@@ -201,47 +203,113 @@ export async function findCaseInCloudByCredentials(
 ): Promise<{ profile: CaseProfile; caseData: CaseFullData } | null> {
   const normName = (name || '').trim();
   const normBday = normalizeBirthday(birthday);
+  const directCaseId = getCanonicalCaseId(normName, normBday);
 
   try {
-    // 0. Try direct deterministic document ID first
-    const directCaseId = `case_${normName.replace(/[\/\s#?\[\]]/g, '_')}_${normBday}`;
+    // 0. The direct canonical document ID is the authoritative source
     const directDoc = await loadCaseFromFirebase(directCaseId);
     if (directDoc && directDoc.profile) {
       return { profile: directDoc.profile, caseData: directDoc };
     }
 
-    // 1. Try registry list
+    // 1. If not found at canonical ID, scan for legacy or alias docs
+    const candidates: Array<{ profile: CaseProfile; caseData: CaseFullData; score: number }> = [];
+
+    const evaluateCandidate = (docData: any, docId?: string) => {
+      if (!docData || !docData.profile) return;
+      const p = docData.profile;
+      if (p.name?.trim() === normName && normalizeBirthday(p.birthday) === normBday) {
+        const vitalsCount = Array.isArray(docData.vitals) ? docData.vitals.length : 0;
+        const apptsCount = Array.isArray(docData.appointments) ? docData.appointments.length : 0;
+        const medsCount = Array.isArray(docData.medications) ? docData.medications.length : 0;
+        const rehabCount = Array.isArray(docData.rehab) ? docData.rehab.length : 0;
+        const score = vitalsCount * 10 + apptsCount * 5 + medsCount * 3 + rehabCount * 2;
+        candidates.push({
+          profile: p,
+          caseData: docData as CaseFullData,
+          score
+        });
+      }
+    };
+
+    // Try registry list
     const remoteProfiles = await fetchProfilesFromFirebase();
     if (remoteProfiles) {
-      const match = remoteProfiles.find(
+      const matching = remoteProfiles.filter(
         (p) => p.name.trim() === normName && normalizeBirthday(p.birthday) === normBday
       );
-      if (match) {
-        const fullData = await loadCaseFromFirebase(match.id);
-        if (fullData) {
-          return { profile: match, caseData: fullData };
-        }
+      for (const p of matching) {
+        const full = await loadCaseFromFirebase(p.id);
+        if (full) evaluateCandidate(full, p.id);
       }
     }
 
-    // 2. Try query all documents in COLLECTION_NAME
+    // Scan collection documents to catch any custom or legacy timestamp IDs
     const colRef = collection(db, COLLECTION_NAME);
     const snap = await getDocs(colRef);
     for (const docSnap of snap.docs) {
       if (docSnap.id === REGISTRY_DOC_ID) continue;
-      const data = docSnap.data() as Partial<CaseFullData>;
-      if (data && data.profile) {
-        if (
-          data.profile.name.trim() === normName &&
-          normalizeBirthday(data.profile.birthday) === normBday
-        ) {
-          return { profile: data.profile, caseData: data as CaseFullData };
-        }
-      }
+      const data = docSnap.data();
+      evaluateCandidate(data, docSnap.id);
+    }
+
+    if (candidates.length > 0) {
+      // Sort descending by data score
+      candidates.sort((a, b) => b.score - a.score);
+      return { profile: candidates[0].profile, caseData: candidates[0].caseData };
     }
   } catch (err) {
     console.warn('Firebase findCaseInCloudByCredentials warning:', err);
   }
 
   return null;
+}
+
+/**
+ * Completely resets a case's health records in Cloud Firestore,
+ * ensuring all records are cleared and duplicate legacy documents are purged.
+ */
+export async function resetCaseInFirebase(profile: CaseProfile): Promise<CloudSyncResult> {
+  try {
+    const canonicalId = getCanonicalCaseId(profile.name, profile.birthday);
+    const normName = profile.name.trim();
+    const normBday = normalizeBirthday(profile.birthday);
+
+    const emptyData: CaseFullData = {
+      profile: { ...profile, id: canonicalId },
+      vitals: [],
+      appointments: [],
+      medications: [],
+      medLogs: [],
+      rehab: []
+    };
+
+    // 1. Overwrite canonical document completely with empty record arrays
+    const canonicalRef = doc(db, COLLECTION_NAME, canonicalId);
+    await setDoc(canonicalRef, {
+      ...emptyData,
+      lastSyncedAt: new Date().toISOString()
+    });
+
+    // 2. Also check and clean up any legacy/duplicate documents for this same person
+    try {
+      const snap = await getDocs(collection(db, COLLECTION_NAME));
+      for (const d of snap.docs) {
+        if (d.id === REGISTRY_DOC_ID || d.id === canonicalId) continue;
+        const data = d.data();
+        if (data.profile?.name?.trim() === normName && normalizeBirthday(data.profile?.birthday) === normBday) {
+          console.log(`[Firebase Reset] Purging duplicate document ${d.id}`);
+          await deleteDoc(doc(db, COLLECTION_NAME, d.id));
+        }
+      }
+    } catch (e) {
+      console.warn('Error purging duplicate Firestore docs during reset:', e);
+    }
+
+    console.log(`[Firebase Reset] Successfully reset ${canonicalId} in Cloud Firestore.`);
+    return { success: true };
+  } catch (err: any) {
+    console.error('Firebase resetCaseInFirebase error:', err);
+    return { success: false, error: err?.message };
+  }
 }

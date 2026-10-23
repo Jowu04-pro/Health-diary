@@ -1,5 +1,5 @@
 import { CaseProfile, VitalSignRecord, AppointmentRecord, MedicationItem, MedicationLog, RehabPlanItem } from '../types/health';
-import { normalizeBirthday } from '../utils/nameHelper';
+import { normalizeBirthday, getCanonicalCaseId } from '../utils/nameHelper';
 
 const todayStr = new Date().toISOString().split('T')[0];
 const yesterdayStr = new Date(Date.now() - 86400000).toISOString().split('T')[0];
@@ -523,16 +523,21 @@ export function getStoredCaseList(): CaseProfile[] {
   // Cross-reference each profile with its saved case data in `data_${profile.id}`
   // to ensure any edited fields (height, weight, bloodType, allergies, etc.) are always the latest
   return list.map((p) => {
+    let resolved = { ...p };
     try {
-      const caseDataRaw = localStorage.getItem(STORAGE_PREFIX + `data_${p.id}`);
+      const canonicalId = getCanonicalCaseId(p.name, p.birthday);
+      resolved.id = canonicalId;
+      const caseDataRaw =
+        localStorage.getItem(STORAGE_PREFIX + `data_${canonicalId}`) ||
+        localStorage.getItem(STORAGE_PREFIX + `data_${p.id}`);
       if (caseDataRaw) {
         const parsed = JSON.parse(caseDataRaw);
         if (parsed && parsed.profile) {
-          return { ...p, ...parsed.profile };
+          resolved = { ...resolved, ...parsed.profile, id: canonicalId };
         }
       }
     } catch (_) {}
-    return p;
+    return resolved;
   });
 }
 

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { HeartPulse, User, Calendar, ShieldCheck, UserPlus, Info, CloudCheck, Loader2 } from 'lucide-react';
 import { CaseProfile } from '../types/health';
-import { normalizeBirthday } from '../utils/nameHelper';
+import { normalizeBirthday, getCanonicalCaseId } from '../utils/nameHelper';
 import { findCaseInCloudByCredentials, loadCaseFromFirebase } from '../services/firebase';
 import { CaseFullData, saveCaseFullData, saveStoredCaseList } from '../data/mockData';
 
@@ -39,47 +39,48 @@ export const LoginScreen: React.FC<LoginScreenProps> = ({
       return;
     }
 
+    const canonicalId = getCanonicalCaseId(trimmedName, cleanBday);
+
     // 1. Check local profiles list first
     const foundLocal = availableProfiles.find(
-      (p) => p.name.trim() === trimmedName && normalizeBirthday(p.birthday) === cleanBday
+      (p) => p.id === canonicalId || (p.name.trim() === trimmedName && normalizeBirthday(p.birthday) === cleanBday)
     );
 
     setIsSearchingCloud(true);
     try {
-      if (foundLocal) {
-        // Attempt to fetch latest case document from Cloud Firestore for cross-device synchronization
-        const remoteData = await loadCaseFromFirebase(foundLocal.id);
-        if (remoteData) {
-          saveCaseFullData(foundLocal.id, remoteData);
-          setIsSearchingCloud(false);
-          onLoginSuccess(remoteData.profile || foundLocal);
-          return;
-        }
-
-        // If direct fetch returns null, try fuzzy credentials search in Firestore
-        const cloudResult = await findCaseInCloudByCredentials(trimmedName, cleanBday);
-        if (cloudResult) {
-          saveCaseFullData(cloudResult.profile.id, cloudResult.caseData);
-          setIsSearchingCloud(false);
-          onLoginSuccess(cloudResult.profile);
-          return;
-        }
-
-        // If offline or not in cloud, proceed with local profile
+      // 0. Query canonical document from Cloud Firestore
+      const remoteDirect = await loadCaseFromFirebase(canonicalId);
+      if (remoteDirect && remoteDirect.profile) {
+        saveCaseFullData(canonicalId, remoteDirect);
+        const updatedList = [
+          ...availableProfiles.filter((p) => p.id !== canonicalId),
+          { ...remoteDirect.profile, id: canonicalId }
+        ];
+        saveStoredCaseList(updatedList);
         setIsSearchingCloud(false);
-        onLoginSuccess(foundLocal);
+        onLoginSuccess({ ...remoteDirect.profile, id: canonicalId });
         return;
       }
 
-      // 2. If not found locally in availableProfiles, query Cloud Firestore for cross-device sync!
+      // 1. Query by credentials across all Cloud Firestore documents
       const cloudResult = await findCaseInCloudByCredentials(trimmedName, cleanBday);
-      if (cloudResult) {
-        // Save to local storage for caching
-        saveCaseFullData(cloudResult.profile.id, cloudResult.caseData);
-        const updatedList = [...availableProfiles.filter((p) => p.id !== cloudResult.profile.id), cloudResult.profile];
+      if (cloudResult && cloudResult.profile) {
+        const canonicalProfile = { ...cloudResult.profile, id: canonicalId };
+        saveCaseFullData(canonicalId, { ...cloudResult.caseData, profile: canonicalProfile });
+
+        const updatedList = [
+          ...availableProfiles.filter((p) => p.id !== canonicalId && p.id !== cloudResult.profile.id),
+          canonicalProfile
+        ];
         saveStoredCaseList(updatedList);
         setIsSearchingCloud(false);
-        onLoginSuccess(cloudResult.profile);
+        onLoginSuccess(canonicalProfile);
+        return;
+      }
+
+      if (foundLocal) {
+        setIsSearchingCloud(false);
+        onLoginSuccess({ ...foundLocal, id: canonicalId });
         return;
       }
     } catch (err) {

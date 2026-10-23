@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Cloud, 
   Download, 
@@ -24,7 +25,7 @@ import {
 import { CaseProfile, VitalSignRecord, AppointmentRecord, MedicationItem, MedicationLog, RehabPlanItem } from '../types/health';
 import { getGivenName } from '../utils/nameHelper';
 import { generateMonthlyReportCanvas, downloadCanvasImage, shareCanvasImage } from '../utils/chartExportHelper';
-import { saveCaseToFirebase, syncProfilesToFirebase, loadCaseFromFirebase } from '../services/firebase';
+import { saveCaseToFirebase, syncProfilesToFirebase, loadCaseFromFirebase, findCaseInCloudByCredentials } from '../services/firebase';
 import { getStoredCaseList } from '../data/mockData';
 
 interface DataSyncModalProps {
@@ -37,7 +38,7 @@ interface DataSyncModalProps {
   medLogs: MedicationLog[];
   rehabPlans: RehabPlanItem[];
   onImportData: (data: any) => void;
-  onResetDefault: () => void;
+  onResetDefault: () => Promise<void> | void;
 }
 
 export const DataSyncModal: React.FC<DataSyncModalProps> = ({
@@ -71,15 +72,19 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
   const [copied, setCopied] = useState(false);
   const [importJson, setImportJson] = useState('');
   const [importError, setImportError] = useState('');
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+  const [resetFeedbackMsg, setResetFeedbackMsg] = useState('');
+
+  // Manual Cloud Sync states & handlers
   const [isManualSyncing, setIsManualSyncing] = useState(false);
+  const [isManualPulling, setIsManualPulling] = useState(false);
   const [manualSyncMsg, setManualSyncMsg] = useState('');
 
-  const handleManualCloudSync = async () => {
+  const handleManualUpload = async () => {
     setIsManualSyncing(true);
     setManualSyncMsg('');
     try {
-      const allProfiles = getStoredCaseList();
-      await syncProfilesToFirebase(allProfiles);
       const fullData = {
         profile: caseProfile,
         vitals: vitalSigns,
@@ -90,36 +95,55 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
       };
       const res = await saveCaseToFirebase(caseProfile.id, fullData);
       if (res.success) {
-        setManualSyncMsg('✅ 已成功上傳！已同步至 Firebase 雲端資料庫（Firestore）。');
+        setManualSyncMsg('✅ 已成功將本機最新日誌上傳至 Firebase 雲端！');
       } else if (res.isQuotaExceeded) {
-        setManualSyncMsg('⚠️ Firebase 雲端免費方案今日配額暫時耗盡（Quota Exceeded）。Google 將於每日午夜重置。您的日誌已完整安全存在手機中，亦可使用「資料備份」分頁一鍵複製移轉！');
+        setManualSyncMsg('⚠️ Firebase 雲端配額暫時耗盡，本機端紀錄完整安全保存。');
       } else {
-        setManualSyncMsg(`❌ 上傳失敗：${res.error || '請檢查網路連線或稍後再試'}`);
+        setManualSyncMsg(`❌ 上傳失敗：${res.error || '請檢查網路連線後再試'}`);
       }
     } catch (err: any) {
-      setManualSyncMsg('❌ 上傳失敗：' + (err?.message || '未知錯誤'));
+      setManualSyncMsg('❌ 上傳發生錯誤：' + (err?.message || '未知錯誤'));
     } finally {
       setIsManualSyncing(false);
     }
   };
 
-  const [isManualPulling, setIsManualPulling] = useState(false);
-
-  const handleManualCloudPull = async () => {
+  const handleManualPull = async () => {
     setIsManualPulling(true);
     setManualSyncMsg('');
     try {
       const remoteData = await loadCaseFromFirebase(caseProfile.id);
       if (remoteData) {
         onImportData(remoteData);
-        setManualSyncMsg('✅ 已成功自 Firebase 雲端拉取最新日誌！畫面數據已更新。');
+        setManualSyncMsg('✅ 已成功從 Firebase 雲端拉取最新日誌！');
       } else {
-        setManualSyncMsg('⚠️ 雲端尚無此個案的更新紀錄，或本機已為最新。');
+        const found = await findCaseInCloudByCredentials(caseProfile.name, caseProfile.birthday);
+        if (found && found.caseData) {
+          onImportData(found.caseData);
+          setManualSyncMsg('✅ 已成功從雲端比對並拉取最新日誌！');
+        } else {
+          setManualSyncMsg('ℹ️ 雲端目前尚無更新版本或此個案之雲端紀錄。');
+        }
       }
     } catch (err: any) {
-      setManualSyncMsg('❌ 下載失敗：' + (err?.message || '未知錯誤'));
+      setManualSyncMsg('❌ 拉取失敗：' + (err?.message || '未知錯誤'));
     } finally {
       setIsManualPulling(false);
+    }
+  };
+
+  const handleExecuteReset = async () => {
+    setIsResetting(true);
+    try {
+      await onResetDefault();
+      setShowResetConfirm(false);
+      setResetFeedbackMsg('✅ 已成功確認清除資料，個案紀錄已全部歸零！');
+    } catch (e: any) {
+      console.error('Reset error:', e);
+      setShowResetConfirm(false);
+      setResetFeedbackMsg('⚠️ 清除資料時發生錯誤：' + (e?.message || '未知錯誤'));
+    } finally {
+      setIsResetting(false);
     }
   };
 
@@ -218,6 +242,8 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
     downloadAnchor.remove();
   };
 
+  const [importSuccess, setImportSuccess] = useState(false);
+
   const handleExecuteImport = () => {
     try {
       const parsed = JSON.parse(importJson);
@@ -226,8 +252,11 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
       }
       onImportData(parsed);
       setImportError('');
-      alert(`已成功匯入${givenName}的健康日記資料！`);
-      onClose();
+      setImportSuccess(true);
+      setTimeout(() => {
+        setImportSuccess(false);
+        onClose();
+      }, 1500);
     } catch (e: any) {
       setImportError('JSON 語法錯誤或檔案內容無效，請確認後再試。');
     }
@@ -474,65 +503,76 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                 </div>
               </div>
 
-              {/* Manual Cloud Push Button */}
-              <div className="space-y-1.5 pt-1">
-                <div className="grid grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    disabled={isManualSyncing || isManualPulling}
-                    onClick={handleManualCloudSync}
-                    className="py-2.5 px-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-800 text-white rounded-xl font-bold text-xs shadow-xs transition flex items-center justify-center gap-1 cursor-pointer active:scale-98"
-                  >
-                    <Cloud className="w-4 h-4 shrink-0" />
-                    <span>{isManualSyncing ? '上傳中...' : '上傳至雲端'}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    disabled={isManualSyncing || isManualPulling}
-                    onClick={handleManualCloudPull}
-                    className="py-2.5 px-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 text-white rounded-xl font-bold text-xs shadow-xs transition flex items-center justify-center gap-1 cursor-pointer active:scale-98"
-                  >
-                    <Download className="w-4 h-4 shrink-0" />
-                    <span>{isManualPulling ? '下載中...' : '從雲端拉取最新'}</span>
-                  </button>
+              {/* Automatic Realtime Sync Info Banner */}
+              <div className="p-3 bg-blue-50/80 rounded-xl border border-blue-200 text-xs text-blue-900 space-y-1">
+                <div className="font-bold flex items-center gap-1.5 text-blue-800">
+                  <Cloud className="w-4 h-4 text-blue-600" />
+                  <span>全自動即時雙向同步已生效</span>
                 </div>
+                <p className="text-[11px] text-blue-700 leading-relaxed">
+                  系統透過 Google Firebase 雲端保持即時串流。在手機、平板或電腦所做的任何新增、修改或打勾，均會在 0.5 秒內自動同步至所有已登入裝置，完全不需手動點擊上傳或下載。
+                </p>
+              </div>
+
+              {/* Manual Cloud Sync Options (Fallback alongside Automatic Realtime Sync) */}
+              <div className="space-y-1.5 pt-1">
+                <button
+                  type="button"
+                  disabled={isManualSyncing}
+                  onClick={handleManualUpload}
+                  className="w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 active:scale-98 text-white font-bold text-xs flex items-center justify-center gap-1.5 shadow-sm transition cursor-pointer disabled:opacity-60"
+                >
+                  <Upload className={`w-3.5 h-3.5 ${isManualSyncing ? 'animate-bounce' : ''}`} />
+                  <span>{isManualSyncing ? '正在上傳至 Firebase 雲端...' : '立即將本機日誌上傳至 Firebase 雲端'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  disabled={isManualPulling}
+                  onClick={handleManualPull}
+                  className="w-full py-2 px-3 rounded-xl border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 active:scale-98 text-emerald-800 font-semibold text-xs flex items-center justify-center gap-1.5 transition cursor-pointer disabled:opacity-60"
+                >
+                  <Download className={`w-3.5 h-3.5 ${isManualPulling ? 'animate-spin' : ''}`} />
+                  <span>{isManualPulling ? '正在從雲端拉取中...' : '從雲端拉取最新日誌'}</span>
+                </button>
 
                 {manualSyncMsg && (
-                  <div className={`p-2 rounded-xl text-xs font-semibold leading-relaxed ${
-                    manualSyncMsg.startsWith('✅') 
-                      ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' 
-                      : 'bg-rose-50 text-rose-800 border border-rose-200'
-                  }`}>
+                  <div className="p-2.5 rounded-xl bg-slate-100 text-slate-800 border border-slate-300 text-xs font-bold text-center animate-in fade-in">
                     {manualSyncMsg}
                   </div>
                 )}
               </div>
 
               {/* Fast Tools */}
-              <div className="grid grid-cols-2 gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={handlePrint}
-                  className="py-2 px-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center justify-center gap-1 shadow-xs cursor-pointer"
-                >
-                  <Printer className="w-3.5 h-3.5 text-slate-500" />
-                  列印交班報告
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (confirm(`確定要還原「${givenName}」的預設示範資料嗎？`)) {
-                      onResetDefault();
-                      alert('已重置為初始示範資料');
-                      onClose();
-                    }
-                  }}
-                  className="py-2 px-2.5 rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 text-rose-700 font-semibold text-xs flex items-center justify-center gap-1 cursor-pointer"
-                >
-                  <RefreshCw className="w-3.5 h-3.5 text-rose-500" />
-                  重置此個案
-                </button>
+              <div className="space-y-2 pt-1 border-t border-slate-200">
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={handlePrint}
+                    className="py-2.5 px-2.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-xs flex items-center justify-center gap-1.5 shadow-xs cursor-pointer active:scale-98 transition"
+                  >
+                    <Printer className="w-3.5 h-3.5 text-slate-500" />
+                    <span>列印交班報告</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setResetFeedbackMsg('');
+                      setShowResetConfirm(true);
+                    }}
+                    className="py-2.5 px-2.5 rounded-xl border border-rose-300 bg-rose-50 hover:bg-rose-100 text-rose-700 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-98 transition"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 text-rose-600" />
+                    <span>重置此個案</span>
+                  </button>
+                </div>
+
+                {resetFeedbackMsg && (
+                  <div className="p-2.5 rounded-xl bg-emerald-50 text-emerald-800 border border-emerald-200 text-xs font-bold text-center animate-in fade-in">
+                    {resetFeedbackMsg}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -591,6 +631,11 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
                     {importError}
                   </p>
                 )}
+                {importSuccess && (
+                  <div className="p-2 bg-emerald-50 border border-emerald-200 rounded-xl text-center text-xs font-bold text-emerald-800">
+                    ✅ 已成功匯入{givenName}的健康日記資料！
+                  </div>
+                )}
                 <button
                   type="button"
                   onClick={handleExecuteImport}
@@ -605,6 +650,60 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
           )}
         </div>
       </div>
+
+      {/* Reset Confirmation Overlay Modal (提示框：確認清除資料) */}
+      {showResetConfirm && typeof document !== 'undefined' && createPortal(
+        <div 
+          className="fixed inset-0 z-[999999] bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={() => setShowResetConfirm(false)}
+        >
+          <div 
+            className="bg-white rounded-3xl max-w-xs w-full p-6 shadow-2xl border border-rose-200 text-center space-y-4 animate-in zoom-in-95 duration-150 relative"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="w-14 h-14 rounded-full bg-rose-100 text-rose-600 flex items-center justify-center mx-auto ring-8 ring-rose-50">
+              <AlertCircle className="w-7 h-7 stroke-[2.5]" />
+            </div>
+            
+            <div className="space-y-2">
+              <h4 className="text-lg font-black text-slate-900 tracking-tight">
+                確認清除資料
+              </h4>
+              <p className="text-xs text-slate-600 font-medium leading-relaxed">
+                確定要清除「{givenName}」的所有健康紀錄嗎？<br />
+                此動作將會清除所有生命徵象、回診行程與用藥紀錄（筆數全部歸零），並同步更新至雲端與所有裝置。
+              </p>
+            </div>
+
+            <div className="flex flex-col gap-2 pt-1">
+              <button
+                type="button"
+                disabled={isResetting}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handleExecuteReset();
+                }}
+                className="w-full py-2.5 bg-rose-600 hover:bg-rose-700 active:scale-98 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 shadow-md cursor-pointer disabled:opacity-50"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isResetting ? 'animate-spin' : ''}`} />
+                <span>{isResetting ? '正在清除資料中...' : '確認清除資料'}</span>
+              </button>
+              <button
+                type="button"
+                disabled={isResetting}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowResetConfirm(false);
+                }}
+                className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold transition cursor-pointer"
+              >
+                取消
+              </button>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 };
