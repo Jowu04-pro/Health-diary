@@ -100,10 +100,11 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Logout / Switch Case */}
           <button
             onClick={onLogout}
-            className="p-1.5 rounded-lg bg-slate-800/70 hover:bg-slate-800 text-slate-200 hover:text-white transition text-xs"
+            className="px-2 py-1.5 rounded-lg bg-emerald-800/80 hover:bg-rose-600 border border-white/20 text-white transition-colors text-xs font-bold cursor-pointer flex items-center gap-1 shadow-xs"
             title="登出 / 切換個案日誌"
           >
             <LogOut className="w-3.5 h-3.5" />
+            <span className="text-[11px]">登出</span>
           </button>
         </div>
       </div>

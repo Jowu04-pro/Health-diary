@@ -24,7 +24,7 @@ import {
 import { CaseProfile, VitalSignRecord, AppointmentRecord, MedicationItem, MedicationLog, RehabPlanItem } from '../types/health';
 import { getGivenName } from '../utils/nameHelper';
 import { generateMonthlyReportCanvas, downloadCanvasImage, shareCanvasImage } from '../utils/chartExportHelper';
-import { saveCaseToFirebase, syncProfilesToFirebase } from '../services/firebase';
+import { saveCaseToFirebase, syncProfilesToFirebase, loadCaseFromFirebase } from '../services/firebase';
 import { getStoredCaseList } from '../data/mockData';
 
 interface DataSyncModalProps {
@@ -100,6 +100,26 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
       setManualSyncMsg('❌ 上傳失敗：' + (err?.message || '未知錯誤'));
     } finally {
       setIsManualSyncing(false);
+    }
+  };
+
+  const [isManualPulling, setIsManualPulling] = useState(false);
+
+  const handleManualCloudPull = async () => {
+    setIsManualPulling(true);
+    setManualSyncMsg('');
+    try {
+      const remoteData = await loadCaseFromFirebase(caseProfile.id);
+      if (remoteData) {
+        onImportData(remoteData);
+        setManualSyncMsg('✅ 已成功自 Firebase 雲端拉取最新日誌！畫面數據已更新。');
+      } else {
+        setManualSyncMsg('⚠️ 雲端尚無此個案的更新紀錄，或本機已為最新。');
+      }
+    } catch (err: any) {
+      setManualSyncMsg('❌ 下載失敗：' + (err?.message || '未知錯誤'));
+    } finally {
+      setIsManualPulling(false);
     }
   };
 
@@ -456,15 +476,27 @@ export const DataSyncModal: React.FC<DataSyncModalProps> = ({
 
               {/* Manual Cloud Push Button */}
               <div className="space-y-1.5 pt-1">
-                <button
-                  type="button"
-                  disabled={isManualSyncing}
-                  onClick={handleManualCloudSync}
-                  className="w-full py-2.5 px-3 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-800 text-white rounded-xl font-bold text-xs shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer active:scale-98"
-                >
-                  <Cloud className="w-4 h-4" />
-                  <span>{isManualSyncing ? '正在同步至 Firebase 雲端...' : '立即將本機日誌上傳至 Firebase 雲端'}</span>
-                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    disabled={isManualSyncing || isManualPulling}
+                    onClick={handleManualCloudSync}
+                    className="py-2.5 px-2 bg-emerald-600 hover:bg-emerald-700 disabled:bg-emerald-800 text-white rounded-xl font-bold text-xs shadow-xs transition flex items-center justify-center gap-1 cursor-pointer active:scale-98"
+                  >
+                    <Cloud className="w-4 h-4 shrink-0" />
+                    <span>{isManualSyncing ? '上傳中...' : '上傳至雲端'}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    disabled={isManualSyncing || isManualPulling}
+                    onClick={handleManualCloudPull}
+                    className="py-2.5 px-2 bg-blue-600 hover:bg-blue-700 disabled:bg-blue-800 text-white rounded-xl font-bold text-xs shadow-xs transition flex items-center justify-center gap-1 cursor-pointer active:scale-98"
+                  >
+                    <Download className="w-4 h-4 shrink-0" />
+                    <span>{isManualPulling ? '下載中...' : '從雲端拉取最新'}</span>
+                  </button>
+                </div>
 
                 {manualSyncMsg && (
                   <div className={`p-2 rounded-xl text-xs font-semibold leading-relaxed ${

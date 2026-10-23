@@ -200,6 +200,32 @@ export default function App() {
         logs,
         rehab
       );
+
+      // Proactively fetch freshest cloud state on mount/switch to ensure cross-device sync
+      loadCaseFromFirebase(activeProfile.id)
+        .then((remoteData) => {
+          if (remoteData && (!remoteData.profile || remoteData.profile.id === activeProfile.id)) {
+            const remoteHash = serializeCaseData(
+              remoteData.profile || null,
+              remoteData.vitals || [],
+              remoteData.appointments || [],
+              remoteData.medications || [],
+              remoteData.medLogs || [],
+              remoteData.rehab || []
+            );
+            if (remoteHash !== lastCloudHashRef.current) {
+              isIncomingRemoteUpdateRef.current = true;
+              lastCloudHashRef.current = remoteHash;
+              if (remoteData.vitals) setVitalSigns(remoteData.vitals);
+              if (remoteData.appointments) setAppointments(remoteData.appointments);
+              if (remoteData.medications) setMedications(remoteData.medications);
+              if (remoteData.medLogs) setMedLogs(remoteData.medLogs);
+              if (remoteData.rehab) setRehabPlans(remoteData.rehab);
+              saveCaseFullData(activeProfile.id, remoteData);
+            }
+          }
+        })
+        .catch((e) => console.warn('Proactive cloud fetch warning:', e));
     } else {
       localStorage.removeItem('case_diary_active_id');
       lastCloudHashRef.current = '';
@@ -581,15 +607,29 @@ export default function App() {
 
   // Import & Reset Data for current case
   const handleImportData = (data: any) => {
-    if (data.caseProfile && activeProfile) {
-      setActiveProfile(data.caseProfile);
-      setProfiles((prev) => prev.map((p) => (p.id === data.caseProfile.id ? data.caseProfile : p)));
+    const prof = data.profile || data.caseProfile;
+    if (prof && activeProfile) {
+      setActiveProfile(prof);
+      setProfiles((prev) => prev.map((p) => (p.id === prof.id ? prof : p)));
     }
-    if (data.vitalSigns) setVitalSigns(data.vitalSigns);
+    const vitals = data.vitals || data.vitalSigns;
+    if (vitals) setVitalSigns(vitals);
     if (data.appointments) setAppointments(data.appointments);
     if (data.medications) setMedications(data.medications);
     if (data.medLogs) setMedLogs(data.medLogs);
-    if (data.rehabPlans) setRehabPlans(data.rehabPlans);
+    const rehab = data.rehab || data.rehabPlans;
+    if (rehab) setRehabPlans(rehab);
+
+    if (activeProfile) {
+      saveCaseFullData(activeProfile.id, {
+        profile: prof || activeProfile,
+        vitals: vitals || vitalSigns,
+        appointments: data.appointments || appointments,
+        medications: data.medications || medications,
+        medLogs: data.medLogs || medLogs,
+        rehab: rehab || rehabPlans,
+      });
+    }
   };
 
   const handleResetDefault = () => {
